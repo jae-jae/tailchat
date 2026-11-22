@@ -1,0 +1,26 @@
+{
+  "mobile": {
+    "id": "mobilebridge",
+    "android": {
+      "sources": ["android/*.kt"],
+      "class": "MobileBridgePlugin",
+      "permissions": [
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_DATA_SYNC",
+        "POST_NOTIFICATIONS"
+      ],
+      "application": [
+        "<service android:name=\"dev.mygo.TransferForegroundService\" android:exported=\"false\" android:foregroundServiceType=\"dataSync\" />",
+        "<activity android:name=\"dev.mygo.ShareReceiverActivity\" android:exported=\"true\" android:excludeFromRecents=\"true\" android:theme=\"@android:style/Theme.Translucent.NoTitleBar\"><intent-filter><action android:name=\"android.intent.action.SEND\" /><category android:name=\"android.intent.category.DEFAULT\" /><data android:mimeType=\"text/plain\" /><data android:mimeType=\"image/*\" /><data android:mimeType=\"*/*\" /></intent-filter><intent-filter><action android:name=\"android.intent.action.SEND_MULTIPLE\" /><category android:name=\"android.intent.category.DEFAULT\" /><data android:mimeType=\"image/*\" /><data android:mimeType=\"*/*\" /></intent-filter></activity>"
+      ]
+    },
+    "ios": {
+      "sources": ["ios/*.swift"],
+      "class": "MobileBridgePlugin",
+      "frameworks": ["UIKit", "Foundation"],
+      "entitlements": {
+        "com.apple.security.application-groups": ["group.dev.tailchat.shared"]
+      }
+    }
+  }
+}

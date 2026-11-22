@@ -13,5 +13,5 @@ tmp/
 *.aab
 *.dmg
 *.app/
-tailchat
-tailchat-headless
+/tailchat
+/tailchat-headless
