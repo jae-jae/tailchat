@@ -1,0 +1,17 @@
+skills/
+dist/
+build/
+tmp/
+.DS_Store
+*.db
+*.db-wal
+*.db-shm
+*.log
+*.exe
+*.ipa
+*.apk
+*.aab
+*.dmg
+*.app/
+tailchat
+tailchat-headless
