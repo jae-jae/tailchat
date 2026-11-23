@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"tailchat/internal/model"
+	"tailchat/internal/updater"
 )
 
 // ViewSnapshot is an immutable point-in-time copy of UI state for lock-free rendering.
@@ -22,6 +23,7 @@ type ViewSnapshot struct {
 	Devices         []model.Device
 	Peers           map[string]model.PeerConnStatus
 	Transfers       map[string]model.TransferTask
+	Update          updater.Status
 	ToastText       string
 	ToastIsErr      bool
 	ToastExpiresAt  time.Time
@@ -44,6 +46,7 @@ type State struct {
 	devices         []model.Device
 	peers           map[string]model.PeerConnStatus
 	transfers       map[string]model.TransferTask
+	updater         *updater.Manager
 	toastText       string
 	toastIsErr      bool
 	toastExpiresAt  time.Time
@@ -51,21 +54,27 @@ type State struct {
 	onRemoteMessage func(model.Message)
 	onConfigChanged func(model.AppConfig)
 
-	subMu       sync.Mutex
-	unsub       func()
-	cancelLoop  context.CancelFunc
-	loopDone    chan struct{}
-	started     bool
+	subMu      sync.Mutex
+	unsub      func()
+	cancelLoop context.CancelFunc
+	loopDone   chan struct{}
+	started    bool
 }
 
 // NewState creates a new UI view-model backed by api.
 func NewState(api model.AppAPI) *State {
-	return &State{
+	s := &State{
 		api:       api,
 		config:    model.AppConfig{Language: model.LanguageAuto, MinimizeToTray: true},
 		peers:     make(map[string]model.PeerConnStatus),
 		transfers: make(map[string]model.TransferTask),
 	}
+	s.updater = updater.NewManager(updater.Options{
+		OnChange: func(updater.Status) {
+			s.notifyInvalidate()
+		},
+	})
+	return s
 }
 
 // SetInvalidate registers the callback invoked whenever background state changes
@@ -399,6 +408,11 @@ func (s *State) Snapshot() ViewSnapshot {
 		toastErr = false
 	}
 
+	var updateSt updater.Status
+	if s.updater != nil {
+		updateSt = s.updater.Status()
+	}
+
 	return ViewSnapshot{
 		Identity:        s.identity,
 		Config:          s.config,
@@ -409,6 +423,7 @@ func (s *State) Snapshot() ViewSnapshot {
 		Devices:         devs,
 		Peers:           peers,
 		Transfers:       transfers,
+		Update:          updateSt,
 		ToastText:       toastTxt,
 		ToastIsErr:      toastErr,
 		ToastExpiresAt:  s.toastExpiresAt,
@@ -416,6 +431,71 @@ func (s *State) Snapshot() ViewSnapshot {
 		HasDirect:       hasDirect,
 		HasDERP:         hasDERP,
 		ConnectivityTxt: connTxt,
+	}
+}
+
+// SetUpdater replaces the updater manager (useful in unit tests).
+func (s *State) SetUpdater(mgr *updater.Manager) {
+	s.mu.Lock()
+	s.updater = mgr
+	s.mu.Unlock()
+	if mgr != nil {
+		mgr.SetOnChange(func(updater.Status) {
+			s.notifyInvalidate()
+		})
+	}
+	s.notifyInvalidate()
+}
+
+// CheckForUpdates asynchronously queries for a newer release.
+func (s *State) CheckForUpdates(ctx context.Context, manual bool) {
+	s.mu.RLock()
+	mgr := s.updater
+	s.mu.RUnlock()
+	if mgr == nil {
+		return
+	}
+	go func() {
+		st, err := mgr.Check(ctx, manual)
+		if !manual {
+			return
+		}
+		t := tr(s.Locale())
+		if err != nil {
+			s.SetToast(t.UpdateCheckFailedPref+err.Error(), true)
+			return
+		}
+		if st.Available {
+			s.SetToast(fmt.Sprintf(t.UpdateAvailableF, st.LatestVersion), false)
+		} else {
+			s.SetToast(t.UpToDate, false)
+		}
+	}()
+}
+
+// InstallUpdate downloads, verifies, and installs a pending native signed MyGo update.
+func (s *State) InstallUpdate(ctx context.Context) {
+	s.mu.RLock()
+	mgr := s.updater
+	s.mu.RUnlock()
+	if mgr == nil {
+		return
+	}
+	go func() {
+		if err := mgr.InstallAndRelaunch(ctx); err != nil {
+			t := tr(s.Locale())
+			s.SetToast(t.UpdateInstallFailPref+err.Error(), true)
+		}
+	}()
+}
+
+// DismissUpdate hides the top banner for the currently discovered version.
+func (s *State) DismissUpdate() {
+	s.mu.RLock()
+	mgr := s.updater
+	s.mu.RUnlock()
+	if mgr != nil {
+		mgr.Dismiss()
 	}
 }
 

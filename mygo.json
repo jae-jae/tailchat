@@ -9,6 +9,10 @@
   "main": "./cmd/tailchat",
   "out": "dist",
   "urlSchemes": ["tailchat"],
+  "updates": {
+    "publicKey": "wzMpEH4OUERcFmRx85DpPScBCO8mydymzTj4j+YrrJQ=",
+    "github": "jae-jae/tailchat"
+  },
   "macos": {
     "icon": "assets/macos/AppIcon.icns",
     "minimumSystemVersion": "13.0"

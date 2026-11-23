@@ -281,6 +281,42 @@ type uiStrings struct {
 	TrayTooltip        string
 	NotifySharedFileF  string
 	NotifyNewMessage   string
+
+	// Auto-update
+	SoftwareUpdates       string
+	CurrentVersionF       string
+	CheckForUpdates       string
+	CheckingUpdates       string
+	UpToDate              string
+	UpdateAvailableF      string
+	UpdateBannerF         string
+	UpdateNow             string
+	ViewUpdate            string
+	DownloadRelease       string
+	UpdateModalTitle      string
+	UpdateVersionCompareF string
+	ReleaseNotesLabel     string
+	NoReleaseNotes        string
+	InstallingUpdate      string
+	InstallingUpdatePctF  string
+	UpdateCheckFailedPref string
+	UpdateInstallFailPref string
+	DismissUpdate         string
+	OpenURLFailPref       string
+
+	// Media preview & lightbox
+	PreviewImage       string
+	LoadingPreview     string
+	DownloadAndPreview string
+	MediaBadgeGIF      string
+	MediaBadgeVideo    string
+	MediaBadgeAudio    string
+	PlayAudio          string
+	PauseAudio         string
+	PlayVideo          string
+	AudioPlayFailPref  string
+	ClosePreview       string
+	ClickToZoomHint    string
 }
 
 var stringsEN = uiStrings{
@@ -438,6 +474,40 @@ var stringsEN = uiStrings{
 	TrayTooltip:        "TailChat — Private P2P Device Mesh",
 	NotifySharedFileF:  "Shared file: %s (%s)",
 	NotifyNewMessage:   "New message received",
+
+	SoftwareUpdates:       "Software Updates",
+	CurrentVersionF:       "Current version: v%s",
+	CheckForUpdates:       "Check for Updates",
+	CheckingUpdates:       "Checking…",
+	UpToDate:              "You're up to date",
+	UpdateAvailableF:      "Update available: v%s",
+	UpdateBannerF:         "TailChat v%s is available",
+	UpdateNow:             "Update & Restart",
+	ViewUpdate:            "View Update",
+	DownloadRelease:       "Download Release",
+	UpdateModalTitle:      "Software Update",
+	UpdateVersionCompareF: "v%s → v%s",
+	ReleaseNotesLabel:     "Release Notes",
+	NoReleaseNotes:        "Includes new features and stability improvements.",
+	InstallingUpdate:      "Downloading & installing update…",
+	InstallingUpdatePctF:  "Downloading update… %d%%",
+	UpdateCheckFailedPref: "Update check failed: ",
+	UpdateInstallFailPref: "Update failed: ",
+	DismissUpdate:         "Dismiss",
+	OpenURLFailPref:       "Failed to open link: ",
+
+	PreviewImage:       "Preview image",
+	LoadingPreview:     "Loading preview…",
+	DownloadAndPreview: "Download & Preview",
+	MediaBadgeGIF:      "GIF",
+	MediaBadgeVideo:    "VIDEO",
+	MediaBadgeAudio:    "AUDIO",
+	PlayAudio:          "Play audio",
+	PauseAudio:         "Pause audio",
+	PlayVideo:          "Open video",
+	AudioPlayFailPref:  "Cannot play audio: ",
+	ClosePreview:       "Close preview",
+	ClickToZoomHint:    "Click image to zoom",
 }
 
 var stringsZH = uiStrings{
@@ -595,6 +665,40 @@ var stringsZH = uiStrings{
 	TrayTooltip:        "TailChat — 私有 P2P 设备互联",
 	NotifySharedFileF:  "发送了文件：%s (%s)",
 	NotifyNewMessage:   "收到一条新消息",
+
+	SoftwareUpdates:       "软件更新",
+	CurrentVersionF:       "当前版本：v%s",
+	CheckForUpdates:       "检查更新",
+	CheckingUpdates:       "检查中…",
+	UpToDate:              "已是最新版本",
+	UpdateAvailableF:      "发现新版本：v%s",
+	UpdateBannerF:         "发现 TailChat v%s 新版本",
+	UpdateNow:             "立即更新并重启",
+	ViewUpdate:            "查看更新",
+	DownloadRelease:       "前往下载页",
+	UpdateModalTitle:      "发现新版本",
+	UpdateVersionCompareF: "v%s → v%s",
+	ReleaseNotesLabel:     "更新内容",
+	NoReleaseNotes:        "包含新特性与稳定性优化。",
+	InstallingUpdate:      "正在下载并安装更新…",
+	InstallingUpdatePctF:  "正在下载更新… %d%%",
+	UpdateCheckFailedPref: "检查更新失败：",
+	UpdateInstallFailPref: "安装更新失败：",
+	DismissUpdate:         "暂不提醒",
+	OpenURLFailPref:       "无法打开链接：",
+
+	PreviewImage:       "查看大图",
+	LoadingPreview:     "正在加载预览…",
+	DownloadAndPreview: "下载并预览",
+	MediaBadgeGIF:      "动图",
+	MediaBadgeVideo:    "视频",
+	MediaBadgeAudio:    "音频",
+	PlayAudio:          "播放音频",
+	PauseAudio:         "暂停播放",
+	PlayVideo:          "播放视频",
+	AudioPlayFailPref:  "无法播放音频：",
+	ClosePreview:       "关闭预览",
+	ClickToZoomHint:    "点击图片查看大图",
 }
 
 func tr(loc Locale) uiStrings {

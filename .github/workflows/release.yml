@@ -65,6 +65,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y nsis
 
       - name: Build ${{ matrix.name }} packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
         run: go tool mygo build -platform "${{ matrix.platform }}"
 
       - name: Collect ${{ matrix.name }} release assets
@@ -74,10 +77,19 @@ jobs:
           shopt -s nullglob
           for f in \
             dist/darwin-*/*.dmg \
+            dist/darwin-*/*.tar.gz \
+            dist/darwin-*/*.delta \
+            dist/darwin-*/update-*.json \
             dist/windows-*/*-setup-*.exe \
+            dist/windows-*/*.zip \
+            dist/windows-*/*.tar.gz \
+            dist/windows-*/*.delta \
+            dist/windows-*/update-*.json \
             dist/linux-*/*.deb \
             dist/linux-*/*.rpm \
-            dist/linux-*/*.tar.gz
+            dist/linux-*/*.tar.gz \
+            dist/linux-*/*.delta \
+            dist/linux-*/update-*.json
           do
             cp "$f" release-assets/
           done

@@ -50,6 +50,14 @@ type App struct {
 	settingsDraft SettingsDraft
 	settingsErr   string
 
+	// Media preview cache, inline audio player, lightbox, and update modal state.
+	media           *MediaCache
+	audio           *AudioController
+	lightboxOpen    bool
+	lightboxMsgID   string
+	lightboxFile    model.FileBlob
+	updateModalOpen bool
+
 	// Platform integration hooks (overridable in headless tests).
 	openFileDialog     func() ([]string, error)
 	readClipboardImage func() []byte
@@ -57,12 +65,15 @@ type App struct {
 	readClipboardText  func() string
 	writeClipboardText func(text string, concealed bool) error
 	openLocalPath      func(path string) error
+	openExternalURL    func(url string) error
 }
 
 // NewApp constructs a TailChat UI controller bound to state.
 func NewApp(state *State) *App {
 	a := &App{
 		state: state,
+		media: NewMediaCache(nil),
+		audio: NewAudioController(nil),
 	}
 	a.openFileDialog = func() ([]string, error) {
 		return mygo.Dialog.Open(mygo.OpenDialogOptions{
@@ -90,12 +101,29 @@ func NewApp(state *State) *App {
 	a.openLocalPath = func(path string) error {
 		return mygo.Shell.OpenPath(path)
 	}
+	a.openExternalURL = func(url string) error {
+		return mygo.Shell.OpenExternal(url)
+	}
 	return a
 }
 
 // SetWindow attaches the host desktop window to this App.
 func (a *App) SetWindow(w *mygo.Window) {
 	a.win = w
+	if w != nil {
+		a.media.SetInvalidate(w.Invalidate)
+		a.audio.SetInvalidate(w.Invalidate)
+	}
+}
+
+// Close stops active inline media playback and releases cached GPU/decoder resources.
+func (a *App) Close() {
+	if a.audio != nil {
+		a.audio.Stop()
+	}
+	if a.media != nil {
+		a.media.Close()
+	}
 }
 
 // OpenPairingModal opens the dedicated 2-tab QR-first Pairing modal (also usable from tray menu and Devices popover).
@@ -198,6 +226,8 @@ func (a *App) View(c *mygoui.Context) {
 	if a.win == nil {
 		svc := c.Services()
 		a.state.SetInvalidate(svc.Invalidate)
+		a.media.SetInvalidate(svc.Invalidate)
+		a.audio.SetInvalidate(svc.Invalidate)
 	}
 
 	// Global window shortcuts.
@@ -235,6 +265,10 @@ func (a *App) View(c *mygoui.Context) {
 	root.Children(func() {
 		devicesBtn = a.renderHeader(c, snap)
 
+		if snap.Update.BannerVisible() {
+			a.renderUpdateBanner(c, snap)
+		}
+
 		if a.searchOpen || a.searchInput != "" {
 			a.renderSearchDrawer(c, snap.Locale)
 		}
@@ -254,10 +288,12 @@ func (a *App) View(c *mygoui.Context) {
 	a.renderDevicesPopover(c, devicesBtn, snap)
 	a.renderPairingModal(c, snap)
 	a.renderSettingsModal(c, snap)
+	a.renderLightboxModal(c, snap)
+	a.renderUpdateModal(c, snap)
 }
 
 func (a *App) anyOverlayOpen() bool {
-	return a.devicesPopoverOpen || a.pairOpen || a.settingsOpen
+	return a.devicesPopoverOpen || a.pairOpen || a.settingsOpen || a.lightboxOpen || a.updateModalOpen
 }
 
 func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element {
@@ -648,6 +684,24 @@ func (a *App) renderFileBubble(c *mygoui.Context, snap ViewSnapshot, msg model.M
 		task.State == model.TransferPaused ||
 		task.State == model.TransferFailed)
 
+	switch ClassifyMedia(fb.FileName, fb.MimeType) {
+	case MediaImage:
+		a.renderImageBubble(c, snap, msg, isLocal, showProgress, task, false)
+	case MediaAnimated:
+		a.renderImageBubble(c, snap, msg, isLocal, showProgress, task, true)
+	case MediaVideo:
+		a.renderVideoBubble(c, snap, msg, isLocal, showProgress, task)
+	case MediaAudio:
+		a.renderAudioBubble(c, snap, msg, isLocal, showProgress, task)
+	default:
+		a.renderStandardFileBubble(c, snap, msg, isLocal, showProgress, task)
+	}
+}
+
+func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg model.Message, isLocal, showProgress bool, task model.TransferTask) {
+	t := tr(snap.Locale)
+	fb := msg.File
+	_, hasTask := snap.Transfers[fb.BlobHash]
 	ext, tileBg, tileFg := zenFileTileColors(fb.FileName)
 
 	var meta string

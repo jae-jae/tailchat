@@ -833,6 +833,55 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 
 			mygoui.Checkbox(c.Key("set-min-tray"), &a.settingsDraft.MinimizeToTray, t.MinimizeToTray)
 
+			mygoui.Box(c).Height(1).FillWidth().Background(zenBorder)
+
+			// Software Updates section.
+			up := snap.Update
+			mygoui.Row(c).
+				Padding(10, 12).
+				Gap(10).
+				Radius(12).
+				Background(zenSurfaceSubtle).
+				Border(1, zenBorder).
+				AlignItems(mygoui.Center).
+				FillWidth().
+				Children(func() {
+					mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+						mygoui.Text(c, t.SoftwareUpdates).FontSize(12.5).Bold().TextColor(zenInk)
+						statusLine := fmt.Sprintf(t.CurrentVersionF, up.CurrentVersion)
+						statusColor := zenInkSecondary
+						switch {
+						case up.Checking:
+							statusLine += " · " + t.CheckingUpdates
+						case up.Available && up.LatestVersion != "":
+							statusLine = fmt.Sprintf(t.UpdateAvailableF, up.LatestVersion)
+							statusColor = zenAccent
+						case up.UpToDate:
+							statusLine += " · " + t.UpToDate
+						}
+						mygoui.Text(c, statusLine).
+							FontSize(11.5).
+							TextColor(statusColor).
+							NoWrap().
+							Ellipsis("…")
+					})
+
+					if up.Available && up.LatestVersion != "" {
+						if zenPillBtn(c, "btn-settings-view-update", t.ViewUpdate, true, false).Clicked() {
+							a.settingsOpen = false
+							a.updateModalOpen = true
+						}
+					} else {
+						btnLabel := t.CheckForUpdates
+						if up.Checking {
+							btnLabel = t.CheckingUpdates
+						}
+						if zenPillBtn(c, "btn-check-updates", btnLabel, false, up.Checking).Clicked() {
+							a.state.CheckForUpdates(context.Background(), true)
+						}
+					}
+				})
+
 			if a.settingsErr != "" {
 				mygoui.Text(c, a.settingsErr).FontSize(12).TextColor(zenDanger).Wrap()
 			}

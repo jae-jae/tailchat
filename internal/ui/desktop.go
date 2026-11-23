@@ -74,6 +74,7 @@ func Run(api model.AppAPI, onReady func()) error {
 		if t != nil {
 			t.Destroy()
 		}
+		app.Close()
 		state.Stop()
 		cancelRoot()
 
@@ -206,6 +207,28 @@ func Run(api model.AppAPI, onReady func()) error {
 				}
 			})
 		})
+
+		if isDesktopPlatform() {
+			go func() {
+				select {
+				case <-time.After(3 * time.Second):
+				case <-rootCtx.Done():
+					return
+				}
+				state.CheckForUpdates(rootCtx, false)
+
+				ticker := time.NewTicker(12 * time.Hour)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ticker.C:
+						state.CheckForUpdates(rootCtx, false)
+					case <-rootCtx.Done():
+						return
+					}
+				}
+			}()
+		}
 
 		if onReady != nil {
 			onReady()
