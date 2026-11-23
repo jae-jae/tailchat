@@ -688,9 +688,9 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 		AlignItems(mygoui.Center).
 		FillWidth().
 		Children(func() {
-			mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-				mygoui.Text(c, title).FontSize(12.5).Bold().TextColor(zenInk).NoWrap().Ellipsis("…")
-				mygoui.Text(c, subtitle).FontSize(11).TextColor(subColor).NoWrap().Ellipsis("…")
+			mygoui.Column(c).Grow(1).MinWidth(0).Clip().Gap(2).Children(func() {
+				mygoui.Text(c, title).FontSize(12.5).Bold().TextColor(zenInk).FillWidth().SingleLine()
+				mygoui.Text(c, subtitle).FontSize(11).TextColor(subColor).FillWidth().SingleLine()
 			})
 
 			if online {
@@ -1013,8 +1013,8 @@ func (a *App) renderSettingsAboutTab(c *mygoui.Context, snap ViewSnapshot, t uiS
 					mygoui.Text(c, statusLine).
 						FontSize(11.5).
 						TextColor(statusColor).
-						NoWrap().
-						Ellipsis("…")
+						FillWidth().
+						SingleLine()
 				})
 
 				if up.Available && up.LatestVersion != "" {
@@ -1059,17 +1059,18 @@ func (a *App) renderSettingsAboutTab(c *mygoui.Context, snap ViewSnapshot, t uiS
 					Border(1, zenBorder).
 					Justify(mygoui.Center).
 					AlignItems(mygoui.Center).
+					Shrink(0).
 					Children(func() {
 						mygoui.Icon(c, iconGitHub).Size(17, 17).TextColor(zenInk)
 					})
 
-				mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+				mygoui.Column(c).Grow(1).MinWidth(0).Clip().Gap(2).Children(func() {
 					mygoui.Text(c, t.GitHubRepoLabel).FontSize(12.5).Bold().TextColor(zenInk)
 					mygoui.Text(c, "github.com/jae-jae/tailchat").
 						FontSize(11.5).
 						TextColor(zenInkSecondary).
-						NoWrap().
-						Ellipsis("…")
+						FillWidth().
+						SingleLine()
 				})
 
 				mygoui.Icon(c, iconExternalLink).Size(15, 15).TextColor(zenInkMuted)

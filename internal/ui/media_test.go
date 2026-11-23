@@ -364,3 +364,128 @@ func TestInlineMediaPreviewLightboxAndUpdateUI(t *testing.T) {
 	imgSet := mygoui.Render(app.View, 540, 740, 2)
 	assertValid2xRender(t, imgSet, outDir, "08_settings_with_updates.png")
 }
+
+func TestLongFilenameTruncationInAllBubbles(t *testing.T) {
+	outDir := os.Getenv("TAILCHAT_SNAPSHOT_DIR")
+	tmpDir := t.TempDir()
+	longImgName := "1795345897607-SuperUltraLongImageFileNameWithoutAnySpaces-macOS-arm64-Retina-Preview.png"
+	longVidName := "1795345897607-TakoDown-UltraLongScreenRecording-Preview-2026-11-23-final.mp4"
+	longAudName := "2026-11-23-MeetingRecording-VeryLongUnbrokenAudioTrackName-FinalCut-48kHz.mp3"
+	longDocName := "这是一段超级长超级长没有任何空格的中文测试文件名称用于验证消息气泡不会溢出-v2026.pdf"
+
+	imgPath := writeSampleGradientPNG(t, tmpDir, longImgName, 480, 260)
+	vidPath := filepath.Join(tmpDir, longVidName)
+	audPath := filepath.Join(tmpDir, longAudName)
+	docPath := filepath.Join(tmpDir, longDocName)
+	for _, p := range []string{vidPath, audPath, docPath} {
+		if err := os.WriteFile(p, []byte("sample-payload"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+
+	mock, st, app, tt := newTestApp(t)
+	t.Cleanup(func() { app.Close() })
+
+	now := time.Now().UnixMilli()
+	mock.mu.Lock()
+	mock.messages = []model.Message{
+		{
+			MsgID:          "msg-long-doc",
+			AuthorDeviceID: "dev-peer-002",
+			AuthorName:     "JMac-Studio-4.local",
+			AuthorSeq:      1,
+			Kind:           model.MessageKindFile,
+			BlobHash:       "blake3-long-doc",
+			CreatedAt:      now - 40_000,
+			File: &model.FileBlob{
+				BlobHash:  "blake3-long-doc",
+				FileName:  longDocName,
+				FileSize:  12 * 1024 * 1024,
+				MimeType:  "application/pdf",
+				LocalPath: docPath,
+				Seeders:   []string{"dev-peer-002"},
+			},
+		},
+		{
+			MsgID:          "msg-long-aud",
+			AuthorDeviceID: "dev-peer-002",
+			AuthorName:     "JMac-Studio-4.local",
+			AuthorSeq:      2,
+			Kind:           model.MessageKindFile,
+			BlobHash:       "blake3-long-aud",
+			CreatedAt:      now - 30_000,
+			File: &model.FileBlob{
+				BlobHash:  "blake3-long-aud",
+				FileName:  longAudName,
+				FileSize:  2 * 1024 * 1024,
+				MimeType:  "audio/mpeg",
+				LocalPath: audPath,
+				Seeders:   []string{"dev-peer-002"},
+			},
+		},
+		{
+			MsgID:          "msg-long-vid",
+			AuthorDeviceID: "dev-peer-002",
+			AuthorName:     "JMac-Studio-4.local",
+			AuthorSeq:      3,
+			Kind:           model.MessageKindFile,
+			BlobHash:       "blake3-long-vid",
+			CreatedAt:      now - 20_000,
+			File: &model.FileBlob{
+				BlobHash:  "blake3-long-vid",
+				FileName:  longVidName,
+				FileSize:  3_500_000,
+				MimeType:  "video/mp4",
+				LocalPath: vidPath,
+				Seeders:   []string{"dev-peer-002"},
+			},
+		},
+		{
+			MsgID:          "msg-long-img",
+			AuthorDeviceID: "dev-self-001",
+			AuthorName:     "MacBook Pro",
+			AuthorSeq:      4,
+			Kind:           model.MessageKindFile,
+			BlobHash:       "blake3-long-img",
+			CreatedAt:      now - 10_000,
+			File: &model.FileBlob{
+				BlobHash:  "blake3-long-img",
+				FileName:  longImgName,
+				FileSize:  799_600,
+				MimeType:  "image/png",
+				LocalPath: imgPath,
+				Seeders:   []string{"dev-self-001"},
+			},
+		},
+	}
+	mock.mu.Unlock()
+	st.RefreshAll()
+
+	tt.Frame()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if entry := app.media.GetImage("blake3-long-img", imgPath, chatThumbMaxSide); entry != nil && entry.state == mediaReady {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	tt.Frame()
+
+	img := mygoui.Render(app.View, 540, 920, 2)
+	if img == nil {
+		t.Fatal("mygoui.Render returned nil")
+	}
+	if outDir != "" {
+		path := filepath.Join(outDir, "12_long_filenames_check.png")
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatalf("create %s: %v", path, err)
+		}
+		if err := png.Encode(f, img); err != nil {
+			_ = f.Close()
+			t.Fatalf("encode %s: %v", path, err)
+		}
+		_ = f.Close()
+	}
+}
+

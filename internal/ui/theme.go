@@ -308,6 +308,7 @@ func zenPillBtn(c *mygoui.Context, key, text string, primary, disabled bool) myg
 		Border(1, border).
 		Justify(mygoui.Center).
 		AlignItems(mygoui.Center).
+		Shrink(0).
 		Disabled(disabled).
 		Label(text)
 	if !disabled {
@@ -340,6 +341,7 @@ func zenMicroBtn(c *mygoui.Context, key string, svg *mygoui.SVG, text string, da
 		Radius(99).
 		Background(bg).
 		AlignItems(mygoui.Center).
+		Shrink(0).
 		Cursor(mygoui.CursorPointer).
 		Label(text).
 		Children(func() {
@@ -370,6 +372,7 @@ func zenDangerPillBtn(c *mygoui.Context, key, text string) mygoui.Element {
 		Border(1, border).
 		Justify(mygoui.Center).
 		AlignItems(mygoui.Center).
+		Shrink(0).
 		Cursor(mygoui.CursorPointer).
 		Label(text).
 		Children(func() {
@@ -395,6 +398,7 @@ func zenDangerSolidPillBtn(c *mygoui.Context, key, text string) mygoui.Element {
 		Border(1, bg).
 		Justify(mygoui.Center).
 		AlignItems(mygoui.Center).
+		Shrink(0).
 		Cursor(mygoui.CursorPointer).
 		Label(text).
 		Children(func() {
@@ -439,6 +443,7 @@ func zenIconPillBtn(c *mygoui.Context, key string, svg *mygoui.SVG, text string,
 		Border(1, border).
 		Justify(mygoui.Center).
 		AlignItems(mygoui.Center).
+		Shrink(0).
 		Disabled(disabled).
 		Label(text)
 	if !disabled {

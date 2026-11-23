@@ -376,8 +376,9 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 						FontSize(11).
 						FontWeight(550).
 						TextColor(subColor).
-						NoWrap().
-						Ellipsis("…")
+						Grow(1).
+						MinWidth(0).
+						SingleLine()
 				})
 			})
 
@@ -784,6 +785,7 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 		Background(zenSurface).
 		Border(1, zenBorder).
 		Shadow(0, 3, 12, 0, mygoui.RGBA(15, 23, 42, 0.06)).
+		Clip().
 		Children(func() {
 			// File header: extension tile + filename & metadata.
 			renderHeaderContent := func() {
@@ -793,6 +795,7 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 					Background(tileBg).
 					Justify(mygoui.Center).
 					AlignItems(mygoui.Center).
+					Shrink(0).
 					Children(func() {
 						mygoui.Text(c, ext).
 							FontSize(11).
@@ -801,18 +804,18 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 							TextColor(tileFg)
 					})
 
-				mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+				mygoui.Column(c).Grow(1).MinWidth(0).Clip().Gap(2).Children(func() {
 					mygoui.Text(c, fb.FileName).
 						FontSize(13.5).
 						FontWeight(600).
 						TextColor(zenInk).
-						NoWrap().
-						Ellipsis("…")
+						FillWidth().
+						SingleLine()
 					mygoui.Text(c, meta).
 						FontSize(11.5).
 						TextColor(zenInkSecondary).
-						NoWrap().
-						Ellipsis("…")
+						FillWidth().
+						SingleLine()
 				})
 			}
 
@@ -831,15 +834,17 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 					Justify(mygoui.Start).
 					AlignItems(mygoui.Center).
 					FillWidth().
+					MinWidth(0).
+					Clip().
 					Cursor(mygoui.CursorPointer).
 					Label(t.OpenFileDirectly).
-					Tooltip(t.OpenFileDirectly).
+					Tooltip(fb.FileName + "\n" + t.OpenFileDirectly).
 					Children(renderHeaderContent)
 				if headerBtn.Clicked() {
 					a.openFileDirectly(fb)
 				}
 			} else {
-				mygoui.Row(c).Gap(11).AlignItems(mygoui.Center).FillWidth().Children(renderHeaderContent)
+				mygoui.Row(c).Gap(11).AlignItems(mygoui.Center).FillWidth().Clip().Tooltip(fb.FileName).Children(renderHeaderContent)
 			}
 
 			// Sleek 6px rounded progress track when actively transferring/paused/failed.
@@ -879,10 +884,10 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 					FontSize(11.5).
 					TextColor(zenInkMuted).
 					Grow(1).
-					NoWrap().
-					Ellipsis("…")
+					MinWidth(0).
+					SingleLine()
 
-				mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
+				mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Shrink(0).Children(func() {
 					blobHash := fb.BlobHash
 					switch {
 					case isLocal:
@@ -940,8 +945,9 @@ func (a *App) renderComposer(c *mygoui.Context, loc Locale, dragOver bool) {
 				Border(1, hintBorder).
 				BorderStyle(mygoui.BorderDashed).
 				Justify(mygoui.Center).
+				Clip().
 				Children(func() {
-					mygoui.Text(c, hintText).FontSize(11).TextColor(hintFg).NoWrap().Ellipsis("…")
+					mygoui.Text(c, hintText).FontSize(11).TextColor(hintFg).SingleLine()
 				})
 
 			// Input row.

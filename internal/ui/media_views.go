@@ -40,8 +40,8 @@ func (a *App) renderUpdateBanner(c *mygoui.Context, snap ViewSnapshot) {
 				FontWeight(600).
 				TextColor(zenAccent).
 				Grow(1).
-				NoWrap().
-				Ellipsis("…")
+				MinWidth(0).
+				SingleLine()
 
 			if !up.Installing {
 				if zenPillBtn(c, "banner-view-update", t.ViewUpdate, true, false).Clicked() {
@@ -196,25 +196,27 @@ func (a *App) renderImageBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 					}
 					nameBtn.Grow(1).
 						MinWidth(0).
+						Clip().
 						Padding(2, 4).
 						Radius(6).
 						Background(nameBg).
 						Justify(mygoui.Start).
 						Cursor(mygoui.CursorPointer).
 						Label(t.OpenFileDirectly).
-						Tooltip(t.OpenFileDirectly).
+						Tooltip(fb.FileName + "\n" + t.OpenFileDirectly).
 						Children(func() {
-							mygoui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
+							mygoui.Column(c).Grow(1).MinWidth(0).Clip().Gap(1).Children(func() {
 								mygoui.Text(c, fb.FileName).
 									FontSize(11.5).
 									FontWeight(600).
 									TextColor(zenInk).
-									NoWrap().
-									Ellipsis("…")
+									FillWidth().
+									SingleLine()
 								mygoui.Text(c, FormatBytes(fb.FileSize)).
 									FontSize(10.5).
 									TextColor(zenInkMuted).
-									NoWrap()
+									FillWidth().
+									SingleLine()
 							})
 						})
 					if nameBtn.Clicked() {
@@ -316,9 +318,9 @@ func (a *App) renderVideoBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 				a.openFileDirectly(fb)
 			}
 
-			// Caption footer with Show in Folder button.
+			// Caption footer: clickable filename opens directly, compact micro button reveals in folder.
 			mygoui.Row(c).
-				Padding(8, 11).
+				Padding(6, 10).
 				Gap(8).
 				AlignItems(mygoui.Center).
 				FillWidth().
@@ -326,20 +328,43 @@ func (a *App) renderVideoBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 				BorderWidth(1, 0, 0, 0).
 				BorderColor(zenBorder).
 				Children(func() {
-					mygoui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
-						mygoui.Text(c, fb.FileName).
-							FontSize(12).
-							FontWeight(600).
-							TextColor(zenInk).
-							NoWrap().
-							Ellipsis("…")
-						mygoui.Text(c, FormatBytes(fb.FileSize)).
-							FontSize(10.5).
-							TextColor(zenInkMuted).
-							NoWrap()
-					})
+					nameBtn := mygoui.ButtonBase(c.Key("open-vid-direct-" + msg.MsgID))
+					nameBg := mygoui.RGBA(0, 0, 0, 0)
+					if nameBtn.Pressed() {
+						nameBg = zenInputFill
+					} else if nameBtn.Hovered() {
+						nameBg = zenSurfaceSubtle
+					}
+					nameBtn.Grow(1).
+						MinWidth(0).
+						Clip().
+						Padding(2, 4).
+						Radius(6).
+						Background(nameBg).
+						Justify(mygoui.Start).
+						Cursor(mygoui.CursorPointer).
+						Label(t.OpenFileDirectly).
+						Tooltip(fb.FileName + "\n" + t.OpenFileDirectly).
+						Children(func() {
+							mygoui.Column(c).Grow(1).MinWidth(0).Clip().Gap(1).Children(func() {
+								mygoui.Text(c, fb.FileName).
+									FontSize(12).
+									FontWeight(600).
+									TextColor(zenInk).
+									FillWidth().
+									SingleLine()
+								mygoui.Text(c, FormatBytes(fb.FileSize)).
+									FontSize(10.5).
+									TextColor(zenInkMuted).
+									FillWidth().
+									SingleLine()
+							})
+						})
+					if nameBtn.Clicked() {
+						a.openFileDirectly(fb)
+					}
 
-					if zenIconPillBtn(c, "reveal-vid-"+msg.MsgID, iconFolderOpen, t.ShowInFolder, false, false).Clicked() {
+					if zenMicroBtn(c, "reveal-vid-"+msg.MsgID, iconFolderOpen, t.ShowInFolder, false).Clicked() {
 						a.revealFileInManager(fb)
 					}
 				})
@@ -382,6 +407,7 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 		Background(zenSurface).
 		Border(1, zenBorder).
 		Shadow(0, 3, 12, 0, mygoui.RGBA(15, 23, 42, 0.06)).
+		Clip().
 		Children(func() {
 			mygoui.Row(c).Gap(10).AlignItems(mygoui.Center).FillWidth().Children(func() {
 				playLabel := t.PlayAudio
@@ -402,6 +428,7 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 					Background(btnBg).
 					Justify(mygoui.Center).
 					AlignItems(mygoui.Center).
+					Shrink(0).
 					Cursor(mygoui.CursorPointer).
 					Label(playLabel).
 					Tooltip(playLabel).
@@ -414,7 +441,7 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 					}
 				}
 
-				mygoui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+				mygoui.Column(c).Grow(1).MinWidth(0).Clip().Gap(4).Children(func() {
 					titleBtn := mygoui.ButtonBase(c.Key("open-aud-direct-" + msg.MsgID))
 					titleBg := mygoui.RGBA(0, 0, 0, 0)
 					if titleBtn.Pressed() {
@@ -427,16 +454,19 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 						Background(titleBg).
 						Justify(mygoui.Start).
 						FillWidth().
+						MinWidth(0).
+						Clip().
 						Cursor(mygoui.CursorPointer).
 						Label(t.OpenFileDirectly).
-						Tooltip(t.OpenFileDirectly).
+						Tooltip(fb.FileName + "\n" + t.OpenFileDirectly).
 						Children(func() {
 							mygoui.Text(c, fb.FileName).
 								FontSize(12.5).
 								FontWeight(600).
 								TextColor(zenInk).
-								NoWrap().
-								Ellipsis("…")
+								Grow(1).
+								MinWidth(0).
+								SingleLine()
 						})
 					if titleBtn.Clicked() {
 						a.openFileDirectly(fb)
@@ -460,8 +490,8 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 					mygoui.Text(c, timeLabel).
 						FontSize(10.5).
 						TextColor(zenInkMuted).
-						NoWrap().
-						Ellipsis("…")
+						FillWidth().
+						SingleLine()
 				})
 
 				if zenMicroBtn(c, "reveal-aud-"+msg.MsgID, iconFolderOpen, t.ShowInFolder, false).Clicked() {
@@ -496,6 +526,7 @@ func (a *App) renderRemoteMediaCard(c *mygoui.Context, snap ViewSnapshot, msg mo
 		Background(zenSurface).
 		Border(1, zenBorder).
 		Shadow(0, 3, 12, 0, mygoui.RGBA(15, 23, 42, 0.06)).
+		Clip().
 		Children(func() {
 			mygoui.Row(c).Gap(11).AlignItems(mygoui.Center).FillWidth().Children(func() {
 				mygoui.Row(c).
@@ -504,12 +535,13 @@ func (a *App) renderRemoteMediaCard(c *mygoui.Context, snap ViewSnapshot, msg mo
 					Background(zenAccentSoft).
 					Justify(mygoui.Center).
 					AlignItems(mygoui.Center).
+					Shrink(0).
 					Children(func() {
 						mygoui.Icon(c, mediaIcon).Size(20, 20).TextColor(zenAccent)
 					})
-				mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-					mygoui.Text(c, fb.FileName).FontSize(13).FontWeight(600).TextColor(zenInk).NoWrap().Ellipsis("…")
-					mygoui.Text(c, meta).FontSize(11.5).TextColor(zenInkSecondary).NoWrap().Ellipsis("…")
+				mygoui.Column(c).Grow(1).MinWidth(0).Clip().Gap(2).Tooltip(fb.FileName).Children(func() {
+					mygoui.Text(c, fb.FileName).FontSize(13).FontWeight(600).TextColor(zenInk).FillWidth().SingleLine()
+					mygoui.Text(c, meta).FontSize(11.5).TextColor(zenInkSecondary).FillWidth().SingleLine()
 				})
 			})
 
@@ -635,13 +667,13 @@ func (a *App) renderLightboxModal(c *mygoui.Context, snap ViewSnapshot) {
 			Children(func() {
 				// Top header bar: filename + dimensions + Open, Show in Folder & Close buttons.
 				mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).FillWidth().Children(func() {
-					mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+					mygoui.Column(c).Grow(1).MinWidth(0).Clip().Gap(2).Tooltip(fb.FileName).Children(func() {
 						mygoui.Text(c, fb.FileName).
 							FontSize(13.5).
 							Bold().
 							TextColor(zenSelfBubbleInk).
-							NoWrap().
-							Ellipsis("…")
+							FillWidth().
+							SingleLine()
 						sub := FormatBytes(fb.FileSize)
 						if dimText != "" {
 							sub = dimText + " · " + sub
@@ -649,7 +681,8 @@ func (a *App) renderLightboxModal(c *mygoui.Context, snap ViewSnapshot) {
 						mygoui.Text(c, sub).
 							FontSize(11).
 							TextColor(mygoui.RGBA(203, 213, 225, 0.85)).
-							NoWrap()
+							FillWidth().
+							SingleLine()
 					})
 
 					if zenPillBtn(c, "lb-open-file", t.OpenFile, false, false).Clicked() {
@@ -666,6 +699,7 @@ func (a *App) renderLightboxModal(c *mygoui.Context, snap ViewSnapshot) {
 						Background(mygoui.RGBA(255, 255, 255, 0.12)).
 						Justify(mygoui.Center).
 						AlignItems(mygoui.Center).
+						Shrink(0).
 						Cursor(mygoui.CursorPointer).
 						Label(t.ClosePreview).
 						Tooltip(t.ClosePreview).
