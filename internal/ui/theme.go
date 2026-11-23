@@ -226,6 +226,47 @@ func zenCircleBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label string, 
 	return btn
 }
 
+// zenCapsuleIconBtn renders a borderless circular icon button inside the Floating Capsule composer.
+func zenCapsuleIconBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label string, size, iconSize float32, muted, active bool) mygoui.Element {
+	btn := mygoui.ButtonBase(c.Key(key))
+
+	bg := mygoui.RGBA(0, 0, 0, 0)
+	fg := zenInkSecondary
+	if muted {
+		fg = zenInkMuted
+	}
+
+	if active {
+		bg = zenAccentSoft
+		fg = zenAccent
+		if btn.Hovered() {
+			bg = mygoui.RGBA(10, 132, 255, 0.17)
+		}
+	} else {
+		if btn.Pressed() {
+			bg = zenProgressTrack
+			fg = zenInk
+		} else if btn.Hovered() {
+			bg = zenInputFill
+			fg = zenInk
+		}
+	}
+
+	btn.Size(size, size).
+		Radius(99).
+		Background(bg).
+		Justify(mygoui.Center).
+		AlignItems(mygoui.Center).
+		Shrink(0).
+		Cursor(mygoui.CursorPointer).
+		Label(label).
+		Tooltip(label).
+		Children(func() {
+			mygoui.Icon(c, svg).Size(iconSize, iconSize).TextColor(fg)
+		})
+	return btn
+}
+
 // zenPairHeaderBtn renders the dedicated top-right Pair CTA pill button.
 func zenPairHeaderBtn(c *mygoui.Context, label, tooltip string, active bool) mygoui.Element {
 	btn := mygoui.ButtonBase(c.Key("btn-pair"))

@@ -932,102 +932,115 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 func (a *App) renderComposer(c *mygoui.Context, loc Locale, dragOver bool) {
 	t := tr(loc)
 	mygoui.Column(c).
-		Padding(10, 14, 14, 14).
+		Padding(4, 14, 14, 14).
 		Gap(8).
-		Background(zenSurface).
-		BorderWidth(1, 0, 0, 0).
-		BorderColor(zenBorder).
+		FillWidth().
 		Children(func() {
-			// Dashed drop-zone hint strip.
-			hintBg := zenDropHintBg
-			hintBorder := zenBorderStrong
-			hintFg := zenInkMuted
-			hintText := t.DropStripIdle
+			// Show drag-and-drop prompt pill only while actively dragging files over the window.
 			if dragOver {
-				hintBg = zenAccentSoft
-				hintBorder = zenAccent
-				hintFg = zenAccent
-				hintText = t.DropStripActive
-			}
-			mygoui.Row(c).
-				Padding(5, 10).
-				Radius(8).
-				Background(hintBg).
-				Border(1, hintBorder).
-				BorderStyle(mygoui.BorderDashed).
-				Justify(mygoui.Center).
-				Clip().
-				Children(func() {
-					mygoui.Text(c, hintText).FontSize(11).TextColor(hintFg).SingleLine()
-				})
-
-			// Input row.
-			mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Children(func() {
-				if zenCircleBtn(c, "btn-attach", iconPlus, t.AttachFiles, false).Clicked() {
-					a.triggerAttachFile()
-				}
-				if zenCircleBtn(c, "btn-paste", iconClipboard, t.PasteClipboard, false).Clicked() {
-					a.triggerPasteClipboard()
-				}
-				if zenCircleBtn(c, "btn-concealed", iconLock, t.PrivateCopy, a.concealedCopy).Clicked() {
-					a.concealedCopy = !a.concealedCopy
-					if a.concealedCopy {
-						a.state.SetToast(t.PrivateCopyOn, false)
-					} else {
-						a.state.SetToast(t.PrivateCopyOff, false)
-					}
-				}
-
-				var in mygoui.Element
 				mygoui.Row(c).
-					Radius(20).
-					Background(zenSurface).
-					Border(1, zenBorderStrong).
-					Padding(8, 14).
-					Grow(1).
-					AlignItems(mygoui.Center).
+					Padding(6, 12).
+					Radius(99).
+					Background(zenAccentSoft).
+					Border(1, zenAccent).
+					BorderStyle(mygoui.BorderDashed).
+					Justify(mygoui.Center).
+					Clip().
 					Children(func() {
-						in = mygoui.TextInputBase(c.Key("composer"), &a.composer).
-							Placeholder(t.ComposerPlace).
-							Label(t.ComposerLabel).
-							Bind(&a.composerRef).
-							FillWidth().
-							FontSize(13).
-							TextColor(zenInk)
+						mygoui.Text(c, t.DropStripActive).FontSize(11.5).FontWeight(600).TextColor(zenAccent).SingleLine()
+					})
+			}
+
+			// Floating Capsule (Option A): single sculpted pill containing quick actions, borderless input, lock toggle & send CTA.
+			capBorder := zenBorder
+			capShadow := mygoui.RGBA(15, 23, 42, 0.08)
+			if dragOver {
+				capBorder = zenAccent
+				capShadow = mygoui.RGBA(10, 132, 255, 0.18)
+			}
+
+			mygoui.Row(c).
+				Height(52).
+				Padding(6, 7, 6, 8).
+				Gap(4).
+				Radius(26).
+				Background(zenSurface).
+				Border(1, capBorder).
+				Shadow(0, 8, 24, 0, capShadow).
+				AlignItems(mygoui.Center).
+				FillWidth().
+				Children(func() {
+					if zenCapsuleIconBtn(c, "btn-attach", iconPlus, t.AttachFiles, 34, 17, false, false).Clicked() {
+						a.triggerAttachFile()
+					}
+					if zenCapsuleIconBtn(c, "btn-paste", iconClipboard, t.PasteClipboard, 34, 15, false, false).Clicked() {
+						a.triggerPasteClipboard()
+					}
+
+					// Hairline vertical divider separating quick actions from text input.
+					mygoui.Row(c).Padding(0, 3).AlignItems(mygoui.Center).Shrink(0).Children(func() {
+						mygoui.Box(c).Size(1, 18).Background(zenBorder)
 					})
 
-				canSend := strings.TrimSpace(a.composer) != ""
-				sendBtn := mygoui.ButtonBase(c.Key("btn-send"))
-				sendBg := zenProgressTrack
-				sendFg := zenInkMuted
-				if canSend {
-					sendBg = zenAccent
-					sendFg = zenSelfBubbleInk
-					if sendBtn.Pressed() {
-						sendBg = zenAccentPressed
-					} else if sendBtn.Hovered() {
-						sendBg = zenAccentHover
-					}
-				}
-				sendBtn.Size(36, 36).
-					Radius(99).
-					Background(sendBg).
-					Justify(mygoui.Center).
-					AlignItems(mygoui.Center).
-					Disabled(!canSend).
-					Label(t.Send).
-					Tooltip(t.SendTooltip)
-				if canSend {
-					sendBtn.Cursor(mygoui.CursorPointer)
-				}
-				sendBtn.Children(func() {
-					mygoui.Icon(c, iconArrowUp).Size(16, 16).TextColor(sendFg)
-				})
+					var in mygoui.Element
+					mygoui.Row(c).
+						Padding(0, 6).
+						Grow(1).
+						MinWidth(0).
+						AlignItems(mygoui.Center).
+						Children(func() {
+							in = mygoui.TextInputBase(c.Key("composer"), &a.composer).
+								Placeholder(t.ComposerPlace).
+								Label(t.ComposerLabel).
+								Bind(&a.composerRef).
+								FillWidth().
+								FontSize(13.5).
+								TextColor(zenInk)
+						})
 
-				if (sendBtn.Clicked() || in.Submitted()) && canSend {
-					a.submitComposer()
-				}
-			})
+					if zenCapsuleIconBtn(c, "btn-concealed", iconLock, t.PrivateCopy, 30, 14, true, a.concealedCopy).Clicked() {
+						a.concealedCopy = !a.concealedCopy
+						if a.concealedCopy {
+							a.state.SetToast(t.PrivateCopyOn, false)
+						} else {
+							a.state.SetToast(t.PrivateCopyOff, false)
+						}
+					}
+
+					canSend := strings.TrimSpace(a.composer) != ""
+					sendBtn := mygoui.ButtonBase(c.Key("btn-send"))
+					sendBg := zenProgressTrack
+					sendFg := zenInkMuted
+					if canSend {
+						sendBg = zenAccent
+						sendFg = zenSelfBubbleInk
+						if sendBtn.Pressed() {
+							sendBg = zenAccentPressed
+						} else if sendBtn.Hovered() {
+							sendBg = zenAccentHover
+						}
+					}
+					sendBtn.Size(36, 36).
+						Radius(99).
+						Background(sendBg).
+						Justify(mygoui.Center).
+						AlignItems(mygoui.Center).
+						Shrink(0).
+						Disabled(!canSend).
+						Label(t.Send).
+						Tooltip(t.SendTooltip)
+					if canSend {
+						sendBtn.Cursor(mygoui.CursorPointer).
+							Shadow(0, 3, 10, 0, mygoui.RGBA(10, 132, 255, 0.28))
+					}
+					sendBtn.Children(func() {
+						mygoui.Icon(c, iconArrowUp).Size(16, 16).TextColor(sendFg)
+					})
+
+					if (sendBtn.Clicked() || in.Submitted()) && canSend {
+						a.submitComposer()
+					}
+				})
 		})
 }
 
