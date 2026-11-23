@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -14,6 +15,27 @@ import (
 	"tailchat/internal/ui"
 	"tailchat/plugins/mobilebridge"
 )
+
+const maxLogFileBytes = 5 << 20 // 5 MiB rotation threshold
+
+func setupPersistentLog(dataDir string) func() {
+	logPath := filepath.Join(dataDir, "tailchat.log")
+	if info, err := os.Stat(logPath); err == nil && info.Size() >= maxLogFileBytes {
+		_ = os.Rename(logPath, logPath+".1")
+	}
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Printf("tailchat: failed to open log file %q: %v", logPath, err)
+		return func() {}
+	}
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	log.Printf("tailchat: started (pid=%d, data_dir=%s)", os.Getpid(), dataDir)
+	return func() {
+		log.Printf("tailchat: shutting down (pid=%d)", os.Getpid())
+		_ = f.Close()
+	}
+}
 
 func main() {
 	defaultDataDir := defaultAppDataDir()
@@ -29,6 +51,8 @@ func main() {
 	if err := os.MkdirAll(*dataDir, 0o755); err != nil {
 		log.Fatalf("tailchat: create data dir %q: %v", *dataDir, err)
 	}
+	closeLog := setupPersistentLog(*dataDir)
+	defer closeLog()
 
 	dbPath := filepath.Join(*dataDir, "tailchat.db")
 	casDir := filepath.Join(*dataDir, "cas")

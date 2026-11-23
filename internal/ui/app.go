@@ -46,6 +46,7 @@ type App struct {
 	pairCopiedUntil time.Time
 	joinCodeInput   string
 	pairErr         string
+	joining         bool
 
 	// Settings & About modal + Clear History confirmation state.
 	settingsOpen       bool
@@ -55,6 +56,12 @@ type App struct {
 	clearConfirmOpen   bool
 	pendingDirMu       sync.Mutex
 	pendingDownloadDir *string
+
+	// Pending results from background UI operations (applied safely on UI thread).
+	asyncMu           sync.Mutex
+	pendingJoinDone   bool
+	pendingJoinErr    string
+	pendingDevicesErr *string
 
 	// Lazily decoded embedded TailChat app icon for About tab.
 	appIconOnce sync.Once
@@ -69,6 +76,7 @@ type App struct {
 	updateModalOpen bool
 
 	// Platform integration hooks (overridable in headless tests).
+	runAsync           func(fn func())
 	openFileDialog     func() ([]string, error)
 	chooseDirDialog    func(defaultDir string) (string, error)
 	readClipboardImage func() []byte
@@ -83,9 +91,10 @@ type App struct {
 // NewApp constructs a TailChat UI controller bound to state.
 func NewApp(state *State) *App {
 	a := &App{
-		state: state,
-		media: NewMediaCache(nil),
-		audio: NewAudioController(nil),
+		state:    state,
+		media:    NewMediaCache(nil),
+		audio:    NewAudioController(nil),
+		runAsync: func(fn func()) { go fn() },
 	}
 	a.openFileDialog = func() ([]string, error) {
 		return mygo.Dialog.Open(mygo.OpenDialogOptions{
@@ -703,7 +712,9 @@ func (a *App) renderMessageBubble(c *mygoui.Context, snap ViewSnapshot, msg mode
 			}
 			if zenMicroBtn(c, "del-"+msg.MsgID, iconTrash, t.Delete, true).Clicked() {
 				msgID := msg.MsgID
-				_ = a.state.DeleteMessage(context.Background(), msgID)
+				a.dispatchAsync(func() {
+					_ = a.state.DeleteMessage(context.Background(), msgID)
+				})
 			}
 		})
 	})
@@ -1020,13 +1031,23 @@ func (a *App) renderComposer(c *mygoui.Context, loc Locale, dragOver bool) {
 		})
 }
 
+func (a *App) dispatchAsync(fn func()) {
+	if a.runAsync != nil {
+		a.runAsync(fn)
+		return
+	}
+	go fn()
+}
+
 func (a *App) submitComposer() {
 	text := strings.TrimSpace(a.composer)
 	if text == "" {
 		return
 	}
 	a.composer = ""
-	_ = a.state.SendText(context.Background(), text)
+	a.dispatchAsync(func() {
+		_ = a.state.SendText(context.Background(), text)
+	})
 }
 
 func (a *App) copyText(text string, concealed bool) {
@@ -1046,23 +1067,27 @@ func (a *App) triggerAttachFile() {
 	if a.openFileDialog == nil {
 		return
 	}
-	go func() {
+	a.dispatchAsync(func() {
 		paths, err := a.openFileDialog()
 		if err != nil {
 			a.state.SetToast(tr(a.state.Locale()).OpenDialogFailPref+err.Error(), true)
 			return
 		}
 		if len(paths) > 0 {
-			a.sendFiles(paths)
+			a.sendFilesSync(paths)
 		}
-	}()
+	})
 }
 
 func (a *App) triggerPasteClipboard() {
 	if a.readClipboardImage != nil {
 		if img := a.readClipboardImage(); len(img) > 0 {
 			name := fmt.Sprintf("clipboard-%s.png", time.Now().Format("20060102-150405"))
-			_ = a.state.SendBytes(context.Background(), name, "image/png", img)
+			imgCopy := append([]byte(nil), img...)
+			a.state.SetToast(tr(a.state.Locale()).ToastSendingFilePref+name, false)
+			a.dispatchAsync(func() {
+				_ = a.state.SendBytes(context.Background(), name, "image/png", imgCopy)
+			})
 			return
 		}
 	}
@@ -1087,11 +1112,30 @@ func (a *App) triggerPasteClipboard() {
 }
 
 func (a *App) sendFiles(paths []string) {
+	cleaned := make([]string, 0, len(paths))
 	for _, p := range paths {
 		clean := filepath.Clean(p)
 		if clean == "" || clean == "." {
 			continue
 		}
+		cleaned = append(cleaned, clean)
+	}
+	if len(cleaned) == 0 {
+		return
+	}
+	a.dispatchAsync(func() {
+		a.sendFilesSync(cleaned)
+	})
+}
+
+func (a *App) sendFilesSync(paths []string) {
+	t := tr(a.state.Locale())
+	for _, p := range paths {
+		clean := filepath.Clean(p)
+		if clean == "" || clean == "." {
+			continue
+		}
+		a.state.SetToast(t.ToastSendingFilePref+filepath.Base(clean), false)
 		_ = a.state.SendFile(context.Background(), clean)
 	}
 }
@@ -1130,33 +1174,45 @@ func (a *App) resolveFilePath(fb *model.FileBlob) (string, error) {
 }
 
 func (a *App) openFileDirectly(fb *model.FileBlob) {
-	t := tr(a.state.Locale())
-	path, err := a.resolveFilePath(fb)
-	if err != nil {
-		a.state.SetToast(t.OpenFileFailedPref+err.Error(), true)
+	if fb == nil {
 		return
 	}
-	if a.openLocalPath == nil {
-		return
-	}
-	if err := a.openLocalPath(path); err != nil {
-		a.state.SetToast(t.OpenFileFailedPref+err.Error(), true)
-	}
+	fbCopy := *fb
+	a.dispatchAsync(func() {
+		t := tr(a.state.Locale())
+		path, err := a.resolveFilePath(&fbCopy)
+		if err != nil {
+			a.state.SetToast(t.OpenFileFailedPref+err.Error(), true)
+			return
+		}
+		if a.openLocalPath == nil {
+			return
+		}
+		if err := a.openLocalPath(path); err != nil {
+			a.state.SetToast(t.OpenFileFailedPref+err.Error(), true)
+		}
+	})
 }
 
 func (a *App) revealFileInManager(fb *model.FileBlob) {
-	t := tr(a.state.Locale())
-	path, err := a.resolveFilePath(fb)
-	if err != nil {
-		a.state.SetToast(t.ShowInFolderFailPref+err.Error(), true)
+	if fb == nil {
 		return
 	}
-	if a.showInFolder == nil {
-		return
-	}
-	if err := a.showInFolder(path); err != nil {
-		a.state.SetToast(t.ShowInFolderFailPref+err.Error(), true)
-	}
+	fbCopy := *fb
+	a.dispatchAsync(func() {
+		t := tr(a.state.Locale())
+		path, err := a.resolveFilePath(&fbCopy)
+		if err != nil {
+			a.state.SetToast(t.ShowInFolderFailPref+err.Error(), true)
+			return
+		}
+		if a.showInFolder == nil {
+			return
+		}
+		if err := a.showInFolder(path); err != nil {
+			a.state.SetToast(t.ShowInFolderFailPref+err.Error(), true)
+		}
+	})
 }
 
 func (a *App) appIcon() mygoui.ImageSource {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"sort"
@@ -711,6 +712,19 @@ func (s *Service) gossipMemberEvents(ctx context.Context, events []model.MemberE
 	s.broadcastControlFrame(ctx, frame, excludePeerID)
 }
 
+func (s *Service) broadcastMessagesAsync(msgs []model.Message) {
+	if len(msgs) == 0 {
+		return
+	}
+	cloned := make([]model.Message, len(msgs))
+	for i := range msgs {
+		cloned[i] = cloneMessage(msgs[i])
+	}
+	s.goBackground(func(bgCtx context.Context) {
+		s.broadcastMessages(bgCtx, cloned)
+	})
+}
+
 func (s *Service) broadcastMessages(ctx context.Context, msgs []model.Message) {
 	if len(msgs) == 0 {
 		return
@@ -754,7 +768,9 @@ func (s *Service) broadcastControlFrame(ctx context.Context, frame ControlFrame,
 		wg.Add(1)
 		go func(pid string) {
 			defer wg.Done()
-			_ = s.sendControlFrame(ctx, pid, frame)
+			if err := s.sendControlFrame(ctx, pid, frame); err != nil && !errors.Is(err, context.Canceled) {
+				log.Printf("syncproto: broadcast %s to %s failed: %v", frame.Type, pid, err)
+			}
 		}(peerID)
 	}
 	wg.Wait()

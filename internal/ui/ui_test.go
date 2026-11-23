@@ -474,6 +474,7 @@ func newTestApp(t *testing.T) (*mockAppAPI, *State, *App, *mygoui.Tester) {
 	t.Cleanup(state.Stop)
 
 	app := NewApp(state)
+	app.runAsync = func(fn func()) { fn() }
 	app.writeClipboardText = func(string, bool) error { return nil }
 	app.readClipboardText = func() string { return "" }
 	app.openLocalPath = func(string) error { return nil }
@@ -1312,6 +1313,74 @@ func TestSettingsAboutTabVersionUpdatesAndGitHub(t *testing.T) {
 	if len(openedURLs) != 1 || openedURLs[0] != "https://github.com/jae-jae/tailchat" {
 		t.Fatalf("expected openExternalURL called with GitHub repo URL, got %v", openedURLs)
 	}
+}
+
+type blockingSendAPI struct {
+	*mockAppAPI
+	started chan string
+	release chan struct{}
+}
+
+func (b *blockingSendAPI) SendFile(ctx context.Context, filePath string) (*model.Message, error) {
+	select {
+	case b.started <- filePath:
+	default:
+	}
+	<-b.release
+	return b.mockAppAPI.SendFile(ctx, filePath)
+}
+
+func TestDropFilesDoesNotBlockUIThread(t *testing.T) {
+	base := newMockAppAPI()
+	api := &blockingSendAPI{
+		mockAppAPI: base,
+		started:    make(chan string, 1),
+		release:    make(chan struct{}),
+	}
+	state := NewState(api)
+	state.Start(context.Background())
+	t.Cleanup(state.Stop)
+
+	// Keep the real production async dispatch (go fn()).
+	app := NewApp(state)
+	tt := mygoui.NewTester(app.View, 540, 740)
+	tt.Frame()
+
+	start := time.Now()
+	if !tt.DropFiles(270, 360, "/tmp/large-video.mp4") {
+		t.Fatalf("expected chat window to accept dropped video file")
+	}
+	tt.Frame()
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("DropFiles blocked UI thread for %v (expected immediate return)", elapsed)
+	}
+
+	select {
+	case got := <-api.started:
+		if got != "/tmp/large-video.mp4" {
+			t.Fatalf("expected /tmp/large-video.mp4, got %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for background SendFile to start")
+	}
+
+	// While SendFile is still blocked, the UI thread must still render freely and show sending feedback.
+	tt.Frame()
+	if !tt.HasText("正在发送文件：large-video.mp4") {
+		t.Fatalf("expected sending-file toast while SendFile is in flight; texts: %v", tt.Texts())
+	}
+
+	// Unblock SendFile and wait for the completion toast & message.
+	close(api.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		tt.Frame()
+		if tt.HasText("已发送文件：large-video.mp4") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected sent-file toast after SendFile unblocked; texts: %v", tt.Texts())
 }
 
 

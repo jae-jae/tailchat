@@ -441,20 +441,40 @@ func (t *MemTransport) OpenStream(ctx context.Context, peerDeviceID string, kind
 	}
 
 	if sess := t.pickActiveSession(ps); sess != nil {
-		stream, err := openTypedStream(sess, kind)
+		stream, err := openTypedStream(ctx, sess, kind)
 		if err == nil {
 			return stream, nil
 		}
+		if ctx.Err() != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				t.clearClosedSession(ps, sess)
+			}
+			return nil, err
+		}
 		t.clearClosedSession(ps, sess)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	ps.dialMu.Lock()
 	defer ps.dialMu.Unlock()
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	if sess := t.pickActiveSession(ps); sess != nil {
-		stream, err := openTypedStream(sess, kind)
+		stream, err := openTypedStream(ctx, sess, kind)
 		if err == nil {
 			return stream, nil
+		}
+		if ctx.Err() != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				t.clearClosedSession(ps, sess)
+			}
+			return nil, err
 		}
 		t.clearClosedSession(ps, sess)
 	}
@@ -463,7 +483,7 @@ func (t *MemTransport) OpenStream(ctx context.Context, peerDeviceID string, kind
 	if err != nil {
 		return nil, err
 	}
-	return openTypedStream(sess, kind)
+	return openTypedStream(ctx, sess, kind)
 }
 
 func (t *MemTransport) pickActiveSession(ps *memPeerState) *yamux.Session {

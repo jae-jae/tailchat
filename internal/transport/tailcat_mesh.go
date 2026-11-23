@@ -640,22 +640,43 @@ func (m *TailcatMesh) OpenStream(ctx context.Context, peerDeviceID string, kind 
 
 	// Fast path: reuse an existing open inbound or outbound yamux session.
 	if sess := m.pickActiveSession(ps); sess != nil {
-		stream, err := openTypedStream(sess, kind)
+		stream, err := openTypedStream(ctx, sess, kind)
 		if err == nil {
 			return stream, nil
 		}
+		if ctx.Err() != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				// Opening a multiplexed stream and writing 1 header byte exceeded deadline -> session is stalled.
+				m.clearClosedSession(ps, sess)
+			}
+			return nil, err
+		}
 		// Session died concurrently; clear stale reference and fall through to dial.
 		m.clearClosedSession(ps, sess)
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	// Slow path: deduplicated fallback dial protected by per-peer dialMu.
 	ps.dialMu.Lock()
 	defer ps.dialMu.Unlock()
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	if sess := m.pickActiveSession(ps); sess != nil {
-		stream, err := openTypedStream(sess, kind)
+		stream, err := openTypedStream(ctx, sess, kind)
 		if err == nil {
 			return stream, nil
+		}
+		if ctx.Err() != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				m.clearClosedSession(ps, sess)
+			}
+			return nil, err
 		}
 		m.clearClosedSession(ps, sess)
 	}
@@ -664,19 +685,69 @@ func (m *TailcatMesh) OpenStream(ctx context.Context, peerDeviceID string, kind 
 	if err != nil {
 		return nil, err
 	}
-	return openTypedStream(sess, kind)
+	stream, err := openTypedStream(ctx, sess, kind)
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		m.clearClosedSession(ps, sess)
+	}
+	return stream, err
 }
 
-func openTypedStream(sess *yamux.Session, kind model.StreamKind) (io.ReadWriteCloser, error) {
-	stream, err := sess.OpenStream()
-	if err != nil {
-		return nil, fmt.Errorf("open yamux stream: %w", err)
+func openTypedStream(ctx context.Context, sess *yamux.Session, kind model.StreamKind) (io.ReadWriteCloser, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if _, err := stream.Write([]byte{byte(kind)}); err != nil {
-		_ = stream.Close()
-		return nil, fmt.Errorf("write stream kind header: %w", err)
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return stream, nil
+	if sess == nil || sess.IsClosed() {
+		return nil, errors.New("yamux session closed")
+	}
+
+	type openResult struct {
+		stream *yamux.Stream
+		err    error
+	}
+	resCh := make(chan openResult, 1)
+	go func() {
+		stream, err := sess.OpenStream()
+		if err != nil {
+			resCh <- openResult{err: fmt.Errorf("open yamux stream: %w", err)}
+			return
+		}
+		if deadline, ok := ctx.Deadline(); ok {
+			_ = stream.SetWriteDeadline(deadline)
+		}
+		stop := context.AfterFunc(ctx, func() { _ = stream.Close() })
+		_, writeErr := stream.Write([]byte{byte(kind)})
+		stop()
+		if writeErr != nil {
+			_ = stream.Close()
+			resCh <- openResult{err: fmt.Errorf("write stream kind header: %w", writeErr)}
+			return
+		}
+		_ = stream.SetWriteDeadline(time.Time{})
+		resCh <- openResult{stream: stream}
+	}()
+
+	select {
+	case res := <-resCh:
+		if res.err != nil {
+			return nil, res.err
+		}
+		if ctx.Err() != nil {
+			_ = res.stream.Close()
+			return nil, ctx.Err()
+		}
+		return res.stream, nil
+	case <-ctx.Done():
+		// Drain asynchronously so any stream that finishes opening late is immediately closed.
+		go func() {
+			if res := <-resCh; res.stream != nil {
+				_ = res.stream.Close()
+			}
+		}()
+		return nil, ctx.Err()
+	}
 }
 
 func (m *TailcatMesh) pickActiveSession(ps *peerState) *yamux.Session {

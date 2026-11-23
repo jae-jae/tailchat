@@ -492,7 +492,7 @@ func (s *Service) SendText(ctx context.Context, text string) (*model.Message, er
 		Type:    model.EventMessageAdded,
 		Message: &msgCopy,
 	})
-	s.broadcastMessages(ctx, []model.Message{msg})
+	s.broadcastMessagesAsync([]model.Message{msg})
 	return &msg, nil
 }
 
@@ -577,7 +577,7 @@ func (s *Service) publishFileBlob(ctx context.Context, blob *model.FileBlob) (*m
 		Type:    model.EventMessageAdded,
 		Message: &msgCopy,
 	})
-	s.broadcastMessages(ctx, []model.Message{msg})
+	s.broadcastMessagesAsync([]model.Message{msg})
 	return &msg, nil
 }
 
@@ -611,7 +611,7 @@ func (s *Service) DeleteMessage(ctx context.Context, msgID string) error {
 		Type:    model.EventMessageDeleted,
 		Message: &msgCopy,
 	})
-	s.broadcastMessages(ctx, []model.Message{msg})
+	s.broadcastMessagesAsync([]model.Message{msg})
 	return nil
 }
 
@@ -673,7 +673,7 @@ func (s *Service) ClearAllMessages(ctx context.Context) error {
 	}
 
 	if len(tombstones) > 0 {
-		s.broadcastMessages(ctx, tombstones)
+		s.broadcastMessagesAsync(tombstones)
 	}
 	return nil
 }

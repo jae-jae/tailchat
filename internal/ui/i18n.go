@@ -217,6 +217,7 @@ type uiStrings struct {
 	ClipboardNoCode    string
 	PastedPairCode     string
 	JoinNow            string
+	Joining            string
 
 	// Settings modal
 	SettingsTitle      string
@@ -275,8 +276,9 @@ type uiStrings struct {
 	ConnDirectF         string
 	ConnDERPF           string
 	ToastSendFailPref   string
-	ToastFileFailPref   string
-	ToastFileSentPref   string
+	ToastFileFailPref    string
+	ToastSendingFilePref string
+	ToastFileSentPref    string
 	ToastPasteFailPref  string
 	ToastSentPref       string
 	ToastDelFailPref    string
@@ -436,6 +438,7 @@ var stringsEN = uiStrings{
 	ClipboardNoCode:    "Clipboard is empty, copy a pairing code first",
 	PastedPairCode:     "Pairing code pasted from clipboard",
 	JoinNow:            "Join Now",
+	Joining:            "Joining…",
 
 	SettingsTitle:      "Settings",
 	TabGeneral:         "General",
@@ -491,8 +494,9 @@ var stringsEN = uiStrings{
 	ConnDirectF:         "%d online · P2P Direct",
 	ConnDERPF:           "%d online · DERP Relay",
 	ToastSendFailPref:   "Send failed: ",
-	ToastFileFailPref:   "File send failed: ",
-	ToastFileSentPref:   "Sent file: ",
+	ToastFileFailPref:    "File send failed: ",
+	ToastSendingFilePref: "Sending file: ",
+	ToastFileSentPref:    "Sent file: ",
 	ToastPasteFailPref:  "Failed to send pasted content: ",
 	ToastSentPref:       "Sent ",
 	ToastDelFailPref:    "Delete failed: ",
@@ -649,6 +653,7 @@ var stringsZH = uiStrings{
 	ClipboardNoCode:    "剪贴板为空，请先复制配对码",
 	PastedPairCode:     "已从剪贴板填入配对码",
 	JoinNow:            "立即加入",
+	Joining:            "加入中…",
 
 	SettingsTitle:      "设置",
 	TabGeneral:         "通用",
@@ -704,8 +709,9 @@ var stringsZH = uiStrings{
 	ConnDirectF:         "%d 台设备在线 · P2P 直连",
 	ConnDERPF:           "%d 台设备在线 · DERP 中继",
 	ToastSendFailPref:   "发送失败：",
-	ToastFileFailPref:   "发送文件失败：",
-	ToastFileSentPref:   "已发送文件：",
+	ToastFileFailPref:    "发送文件失败：",
+	ToastSendingFilePref: "正在发送文件：",
+	ToastFileSentPref:    "已发送文件：",
 	ToastPasteFailPref:  "发送粘贴内容失败：",
 	ToastSentPref:       "已发送 ",
 	ToastDelFailPref:    "删除失败：",

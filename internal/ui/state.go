@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -550,6 +551,7 @@ func (s *State) SendText(ctx context.Context, text string) error {
 	}
 	msg, err := s.api.SendText(ctx, trimmed)
 	if err != nil {
+		log.Printf("ui: SendText failed: %v", err)
 		s.SetToast(tr(s.Locale()).ToastSendFailPref+err.Error(), true)
 		return err
 	}
@@ -570,6 +572,7 @@ func (s *State) SendFile(ctx context.Context, path string) error {
 	t := tr(s.Locale())
 	msg, err := s.api.SendFile(ctx, path)
 	if err != nil {
+		log.Printf("ui: SendFile(%q) failed: %v", path, err)
 		s.SetToast(t.ToastFileFailPref+err.Error(), true)
 		return err
 	}
@@ -590,6 +593,7 @@ func (s *State) SendBytes(ctx context.Context, fileName, mimeType string, data [
 	t := tr(s.Locale())
 	msg, err := s.api.SendBytes(ctx, fileName, mimeType, data)
 	if err != nil {
+		log.Printf("ui: SendBytes(%q, %d bytes) failed: %v", fileName, len(data), err)
 		s.SetToast(t.ToastPasteFailPref+err.Error(), true)
 		return err
 	}
@@ -605,6 +609,7 @@ func (s *State) SendBytes(ctx context.Context, fileName, mimeType string, data [
 // DeleteMessage deletes a message via AppAPI.
 func (s *State) DeleteMessage(ctx context.Context, msgID string) error {
 	if err := s.api.DeleteMessage(ctx, msgID); err != nil {
+		log.Printf("ui: DeleteMessage(%q) failed: %v", msgID, err)
 		s.SetToast(tr(s.Locale()).ToastDelFailPref+err.Error(), true)
 		return err
 	}
@@ -619,6 +624,7 @@ func (s *State) DeleteMessage(ctx context.Context, msgID string) error {
 func (s *State) ClearAllMessages(ctx context.Context) error {
 	t := tr(s.Locale())
 	if err := s.api.ClearAllMessages(ctx); err != nil {
+		log.Printf("ui: ClearAllMessages failed: %v", err)
 		s.SetToast(t.ToastClearFailPref+err.Error(), true)
 		return err
 	}

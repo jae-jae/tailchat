@@ -172,6 +172,13 @@ func (d SettingsDraft) ToConfig() (model.AppConfig, error) {
 
 // renderDevicesPopover renders the lightweight Devices-only popover anchored to the header button.
 func (a *App) renderDevicesPopover(c *mygoui.Context, anchor mygoui.Element, snap ViewSnapshot) {
+	a.asyncMu.Lock()
+	if a.pendingDevicesErr != nil {
+		a.devicesErr = *a.pendingDevicesErr
+		a.pendingDevicesErr = nil
+	}
+	a.asyncMu.Unlock()
+
 	t := tr(snap.Locale)
 	mygoui.PopoverBase(c.Key("popover-devices"), anchor, &a.devicesPopoverOpen, func(panel mygoui.Element) {
 		panel.AttachTo(anchor, mygoui.AnchorBottomRight, mygoui.AnchorTopRight).
@@ -264,6 +271,21 @@ func (a *App) renderDevicesPopover(c *mygoui.Context, anchor mygoui.Element, sna
 
 // renderPairingModal renders the dedicated 2-tab QR-first Pairing modal.
 func (a *App) renderPairingModal(c *mygoui.Context, snap ViewSnapshot) {
+	a.asyncMu.Lock()
+	if a.pendingJoinDone {
+		a.joining = false
+		a.pendingJoinDone = false
+		if a.pendingJoinErr != "" {
+			a.pairErr = a.pendingJoinErr
+		} else {
+			a.pairErr = ""
+			a.joinCodeInput = ""
+			a.pairOpen = false
+		}
+		a.pendingJoinErr = ""
+	}
+	a.asyncMu.Unlock()
+
 	t := tr(snap.Locale)
 	mygoui.DialogBase(c.Key("modal-pair"), &a.pairOpen, func(backdrop, panel mygoui.Element) {
 		backdrop.Background(mygoui.RGBA(15, 23, 42, 0.36))
@@ -594,7 +616,11 @@ func (a *App) renderPairingJoinTab(c *mygoui.Context, loc Locale) {
 					}
 				}
 
-				canJoin := strings.TrimSpace(a.joinCodeInput) != ""
+				canJoin := strings.TrimSpace(a.joinCodeInput) != "" && !a.joining
+				joinLabel := t.JoinNow
+				if a.joining {
+					joinLabel = t.Joining
+				}
 				joinBtn := mygoui.ButtonBase(c.Key("btn-join-group"))
 				joinBg := zenAccent
 				if !canJoin {
@@ -612,23 +638,32 @@ func (a *App) renderPairingJoinTab(c *mygoui.Context, loc Locale) {
 					Justify(mygoui.Center).
 					AlignItems(mygoui.Center).
 					Disabled(!canJoin).
-					Label(t.JoinNow)
+					Label(joinLabel)
 				if canJoin {
 					joinBtn.Cursor(mygoui.CursorPointer)
 				}
 				joinBtn.Children(func() {
-					mygoui.Text(c, t.JoinNow).FontSize(13).FontWeight(600).TextColor(zenSelfBubbleInk).NoWrap()
+					mygoui.Text(c, joinLabel).FontSize(13).FontWeight(600).TextColor(zenSelfBubbleInk).NoWrap()
 				})
 
 				if (joinBtn.Clicked() || in.Submitted()) && canJoin {
 					code := strings.TrimSpace(a.joinCodeInput)
-					if err := a.state.JoinWithPairingCode(context.Background(), code); err != nil {
-						a.pairErr = err.Error()
-					} else {
-						a.pairErr = ""
-						a.joinCodeInput = ""
-						a.pairOpen = false
-					}
+					a.joining = true
+					a.pairErr = ""
+					a.dispatchAsync(func() {
+						err := a.state.JoinWithPairingCode(context.Background(), code)
+						a.asyncMu.Lock()
+						a.pendingJoinDone = true
+						if err != nil {
+							a.pendingJoinErr = err.Error()
+						} else {
+							a.pendingJoinErr = ""
+						}
+						a.asyncMu.Unlock()
+						if a.win != nil {
+							a.win.Invalidate()
+						}
+					})
 				}
 			})
 		})
@@ -701,11 +736,20 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 
 			if !isSelf {
 				if zenDangerPillBtn(c, "revoke-"+dev.DeviceID, t.Remove).Clicked() {
-					if err := a.state.RevokeDevice(context.Background(), dev.DeviceID); err != nil {
-						a.devicesErr = err.Error()
-					} else {
-						a.devicesErr = ""
-					}
+					devID := dev.DeviceID
+					a.dispatchAsync(func() {
+						err := a.state.RevokeDevice(context.Background(), devID)
+						errStr := ""
+						if err != nil {
+							errStr = err.Error()
+						}
+						a.asyncMu.Lock()
+						a.pendingDevicesErr = &errStr
+						a.asyncMu.Unlock()
+						if a.win != nil {
+							a.win.Invalidate()
+						}
+					})
 				}
 			}
 		})
@@ -1162,11 +1206,11 @@ func (a *App) renderClearConfirmModal(c *mygoui.Context, snap ViewSnapshot) {
 					a.clearConfirmOpen = false
 				}
 				if zenDangerSolidPillBtn(c, "clear-confirm-ok", t.ClearConfirmOK).Clicked() {
-					err := a.state.ClearAllMessages(context.Background())
 					a.clearConfirmOpen = false
-					if err == nil {
-						a.settingsOpen = false
-					}
+					a.settingsOpen = false
+					a.dispatchAsync(func() {
+						_ = a.state.ClearAllMessages(context.Background())
+					})
 				}
 			})
 		})
