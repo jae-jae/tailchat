@@ -394,15 +394,15 @@ func (s *State) Snapshot() ViewSnapshot {
 
 func formatConnectivityLabel(onlineCount int, hasDirect, hasDERP bool) string {
 	if onlineCount == 0 {
-		return "Offline"
+		return "离线 · 等待设备连接"
 	}
 	if hasDirect && hasDERP {
-		return fmt.Sprintf("%d online · Direct + DERP", onlineCount)
+		return fmt.Sprintf("%d 台设备在线 · P2P 直连 + DERP", onlineCount)
 	}
 	if hasDirect {
-		return fmt.Sprintf("%d online · Direct", onlineCount)
+		return fmt.Sprintf("%d 台设备在线 · P2P 直连", onlineCount)
 	}
-	return fmt.Sprintf("%d online · Relay (DERP)", onlineCount)
+	return fmt.Sprintf("%d 台设备在线 · DERP 中继", onlineCount)
 }
 
 // SetSearchQuery updates the live FTS5 search query and reloads matching messages.
@@ -442,7 +442,7 @@ func (s *State) SendText(ctx context.Context, text string) error {
 	}
 	msg, err := s.api.SendText(ctx, trimmed)
 	if err != nil {
-		s.SetToast("Send failed: "+err.Error(), true)
+		s.SetToast("发送失败："+err.Error(), true)
 		return err
 	}
 	if msg != nil {
@@ -461,14 +461,14 @@ func (s *State) SendFile(ctx context.Context, path string) error {
 	}
 	msg, err := s.api.SendFile(ctx, path)
 	if err != nil {
-		s.SetToast("Failed to send file: "+err.Error(), true)
+		s.SetToast("发送文件失败："+err.Error(), true)
 		return err
 	}
 	if msg != nil {
 		s.mu.Lock()
 		s.upsertMessageLocked(*msg)
 		s.mu.Unlock()
-		s.SetToast("Sent file: "+fileDisplayName(msg, path), false)
+		s.SetToast("已发送文件："+fileDisplayName(msg, path), false)
 	}
 	return nil
 }
@@ -480,14 +480,14 @@ func (s *State) SendBytes(ctx context.Context, fileName, mimeType string, data [
 	}
 	msg, err := s.api.SendBytes(ctx, fileName, mimeType, data)
 	if err != nil {
-		s.SetToast("Failed to send pasted data: "+err.Error(), true)
+		s.SetToast("发送粘贴内容失败："+err.Error(), true)
 		return err
 	}
 	if msg != nil {
 		s.mu.Lock()
 		s.upsertMessageLocked(*msg)
 		s.mu.Unlock()
-		s.SetToast("Sent "+fileName, false)
+		s.SetToast("已发送 "+fileName, false)
 	}
 	return nil
 }
@@ -495,7 +495,7 @@ func (s *State) SendBytes(ctx context.Context, fileName, mimeType string, data [
 // DeleteMessage deletes a message via AppAPI.
 func (s *State) DeleteMessage(ctx context.Context, msgID string) error {
 	if err := s.api.DeleteMessage(ctx, msgID); err != nil {
-		s.SetToast("Delete failed: "+err.Error(), true)
+		s.SetToast("删除失败："+err.Error(), true)
 		return err
 	}
 	s.mu.Lock()
@@ -508,7 +508,7 @@ func (s *State) DeleteMessage(ctx context.Context, msgID string) error {
 // DownloadFile starts or resumes downloading a content-addressed file blob.
 func (s *State) DownloadFile(ctx context.Context, blobHash string) error {
 	if err := s.api.DownloadFile(ctx, blobHash); err != nil {
-		s.SetToast("Download failed: "+err.Error(), true)
+		s.SetToast("下载失败："+err.Error(), true)
 		return err
 	}
 	if t, err := s.api.GetTransfer(blobHash); err == nil && t != nil {
@@ -523,7 +523,7 @@ func (s *State) DownloadFile(ctx context.Context, blobHash string) error {
 // PauseTransfer pauses an in-flight download.
 func (s *State) PauseTransfer(blobHash string) error {
 	if err := s.api.PauseTransfer(blobHash); err != nil {
-		s.SetToast("Pause failed: "+err.Error(), true)
+		s.SetToast("暂停失败："+err.Error(), true)
 		return err
 	}
 	if t, err := s.api.GetTransfer(blobHash); err == nil && t != nil {
@@ -538,7 +538,7 @@ func (s *State) PauseTransfer(blobHash string) error {
 // CancelTransfer cancels an in-flight or paused download.
 func (s *State) CancelTransfer(blobHash string) error {
 	if err := s.api.CancelTransfer(blobHash); err != nil {
-		s.SetToast("Cancel failed: "+err.Error(), true)
+		s.SetToast("取消失败："+err.Error(), true)
 		return err
 	}
 	if t, err := s.api.GetTransfer(blobHash); err == nil && t != nil {
@@ -554,7 +554,7 @@ func (s *State) CancelTransfer(blobHash string) error {
 func (s *State) CreatePairingCode(ctx context.Context, ttlSeconds int) (string, model.PairingToken, error) {
 	code, tok, err := s.api.CreatePairingCode(ctx, ttlSeconds)
 	if err != nil {
-		s.SetToast("Pairing failed: "+err.Error(), true)
+		s.SetToast("生成配对码失败："+err.Error(), true)
 		return "", model.PairingToken{}, err
 	}
 	return code, tok, nil
@@ -569,37 +569,37 @@ func (s *State) CancelPairing() error {
 func (s *State) JoinWithPairingCode(ctx context.Context, code string) error {
 	trimmed := strings.TrimSpace(code)
 	if trimmed == "" {
-		return fmt.Errorf("pairing code is empty")
+		return fmt.Errorf("配对码不能为空")
 	}
 	if err := s.api.JoinWithPairingCode(ctx, trimmed); err != nil {
-		s.SetToast("Join failed: "+err.Error(), true)
+		s.SetToast("加入设备群失败："+err.Error(), true)
 		return err
 	}
 	s.RefreshAll()
-	s.SetToast("Joined device group", false)
+	s.SetToast("已加入设备群", false)
 	return nil
 }
 
 // RevokeDevice revokes a paired device and disconnects its tunnels.
 func (s *State) RevokeDevice(ctx context.Context, deviceID string) error {
 	if err := s.api.RevokeDevice(ctx, deviceID); err != nil {
-		s.SetToast("Revoke failed: "+err.Error(), true)
+		s.SetToast("移除设备失败："+err.Error(), true)
 		return err
 	}
 	s.RefreshAll()
-	s.SetToast("Device revoked", false)
+	s.SetToast("已移除设备", false)
 	return nil
 }
 
 // ApplySettings persists config updates and optionally hot-switches DERP settings.
 func (s *State) ApplySettings(ctx context.Context, cfg model.AppConfig, hotSwitchDERP bool) error {
 	if err := s.api.UpdateConfig(ctx, cfg); err != nil {
-		s.SetToast("Failed to save settings: "+err.Error(), true)
+		s.SetToast("保存设置失败："+err.Error(), true)
 		return err
 	}
 	if hotSwitchDERP {
 		if err := s.api.UpdateDERP(ctx, cfg.DERP); err != nil {
-			s.SetToast("DERP switch failed: "+err.Error(), true)
+			s.SetToast("DERP 切换失败："+err.Error(), true)
 			return err
 		}
 	}
@@ -607,9 +607,9 @@ func (s *State) ApplySettings(ctx context.Context, cfg model.AppConfig, hotSwitc
 	s.config = s.api.Config()
 	s.mu.Unlock()
 	if hotSwitchDERP {
-		s.SetToast("Switched DERP server", false)
+		s.SetToast("已切换 DERP 服务器", false)
 	} else {
-		s.SetToast("Settings saved", false)
+		s.SetToast("设置已保存", false)
 	}
 	return nil
 }
@@ -657,4 +657,24 @@ func FormatTimestamp(unixMilli int64) string {
 		return ""
 	}
 	return time.UnixMilli(unixMilli).Local().Format("15:04")
+}
+
+// FormatTimeChip formats a UnixMilli timestamp into a Zen Popover timeline pill label
+// such as "今天 14:12", "昨天 18:30", or "11-21 09:05".
+func FormatTimeChip(unixMilli int64) string {
+	if unixMilli <= 0 {
+		return ""
+	}
+	t := time.UnixMilli(unixMilli).Local()
+	now := time.Now().Local()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	yesterdayStart := todayStart.AddDate(0, 0, -1)
+	switch {
+	case !t.Before(todayStart):
+		return "今天 " + t.Format("15:04")
+	case !t.Before(yesterdayStart):
+		return "昨天 " + t.Format("15:04")
+	default:
+		return t.Format("01-02 15:04")
+	}
 }

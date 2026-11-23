@@ -110,13 +110,16 @@ func Run(api model.AppAPI, onReady func()) error {
 		state.Start(rootCtx)
 
 		w := mygo.NewWindow(mygo.WindowOptions{
-			Title:     "TailChat",
-			Width:     960,
-			Height:    680,
-			MinWidth:  640,
-			MinHeight: 480,
-			StateKey:  "tailchat-main",
-			Content:   mygoui.View(app.View),
+			Title:                "TailChat",
+			Width:                540,
+			Height:               740,
+			MinWidth:             420,
+			MinHeight:            540,
+			TitleBarStyle:        mygo.TitleBarHiddenInset,
+			TrafficLightPosition: &mygo.Point{X: 16, Y: 22},
+			BackgroundColor:      "#F3F5F9",
+			StateKey:             "tailchat-zen-v1",
+			Content:              mygoui.View(app.View),
 		})
 		mu.Lock()
 		win = w

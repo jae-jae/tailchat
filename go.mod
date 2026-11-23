@@ -6,7 +6,9 @@ require (
 	github.com/egoist/mygo v0.10.0
 	github.com/hashicorp/yamux v0.1.2
 	github.com/oklog/ulid/v2 v2.1.2
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/tailscale/tailcat v0.7.1-0.20261121174825-7dda98775372
+	go4.org/mem v0.0.0-20240501181205-ae6ca9944745
 	lukechampine.com/blake3 v1.5.1
 	modernc.org/sqlite v1.62.0
 	tailscale.com v1.105.0-pre.0.20261118173401-6a92f86aceb2
@@ -55,7 +57,6 @@ require (
 	github.com/tailscale/wireguard-go v0.0.0-20261117232807-a1800e9c5305 // indirect
 	github.com/u-root/u-root v0.16.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb // indirect
 	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
