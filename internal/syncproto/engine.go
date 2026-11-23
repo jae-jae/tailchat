@@ -19,9 +19,12 @@ import (
 )
 
 const (
-	msgBatchLimit       = 50
-	maxSyncMessagesOnce = 2000
-	streamIOTimeout     = 15 * time.Second
+	msgBatchLimit                = 50
+	maxSyncMessagesOnce          = 2000
+	streamIOTimeout              = 15 * time.Second
+	chunkIOTimeout               = 45 * time.Second
+	chunkFetchMaxRounds          = 3
+	transferProgressEmitInterval = 80 * time.Millisecond
 )
 
 // goBackground safely spawns a goroutine tracked by s.wg without racing Close().
@@ -1027,10 +1030,11 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 		close(jobs)
 
 		var (
-			taskMu   sync.Mutex
-			errMu    sync.Mutex
-			firstErr error
-			wg       sync.WaitGroup
+			taskMu           sync.Mutex
+			lastProgressEmit time.Time
+			errMu            sync.Mutex
+			firstErr         error
+			wg               sync.WaitGroup
 		)
 
 		for w := 0; w < workers; w++ {
@@ -1071,18 +1075,29 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 						continue
 					}
 
+					var (
+						snap       model.TransferTask
+						shouldEmit bool
+					)
 					taskMu.Lock()
 					task.ChunkBitmap = model.SetChunk(task.ChunkBitmap, idx)
 					task.BytesDone = computeBytesDone(task.ChunkBitmap, blob.ChunkCount, chunkSize, blob.FileSize)
-					task.UpdatedAt = time.Now().UnixMilli()
+					now := time.Now()
+					task.UpdatedAt = now.UnixMilli()
 					_ = s.store.UpsertTransferTask(*task)
-					snap := cloneTransferTask(*task)
+					if lastProgressEmit.IsZero() || now.Sub(lastProgressEmit) >= transferProgressEmitInterval || task.BytesDone >= task.BytesTotal {
+						lastProgressEmit = now
+						snap = cloneTransferTask(*task)
+						shouldEmit = true
+					}
 					taskMu.Unlock()
 
-					s.emit(model.AppEvent{
-						Type:     model.EventTransferUpdated,
-						Transfer: &snap,
-					})
+					if shouldEmit {
+						s.emit(model.AppEvent{
+							Type:     model.EventTransferUpdated,
+							Transfer: &snap,
+						})
+					}
 				}
 			}()
 		}
@@ -1189,52 +1204,65 @@ func (s *Service) fetchChunkFromPeers(ctx context.Context, blobHash string, inde
 	start := index % len(candidates)
 	var lastErr error
 
-	for attempt := 0; attempt < len(candidates); attempt++ {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
+	for round := 0; round < chunkFetchMaxRounds; round++ {
+		if round > 0 {
+			backoff := time.Duration(round) * 200 * time.Millisecond
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
 		}
-		peerID := candidates[(start+attempt)%len(candidates)]
 
-		reqCtx, cancel := context.WithTimeout(ctx, streamIOTimeout)
-		stream, err := s.tr.OpenStream(reqCtx, peerID, model.StreamKindChunkData)
-		if err != nil {
-			cancel()
-			lastErr = err
-			continue
-		}
-		stop := context.AfterFunc(reqCtx, func() { _ = stream.Close() })
+		for attempt := 0; attempt < len(candidates); attempt++ {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			peerID := candidates[(start+attempt)%len(candidates)]
 
-		err = WriteFrame(stream, ChunkRequest{
-			BlobHash: blobHash,
-			Index:    index,
-		})
-		if err != nil {
+			reqCtx, cancel := context.WithTimeout(ctx, chunkIOTimeout)
+			stream, err := s.tr.OpenStream(reqCtx, peerID, model.StreamKindChunkData)
+			if err != nil {
+				cancel()
+				lastErr = err
+				continue
+			}
+			stop := context.AfterFunc(reqCtx, func() { _ = stream.Close() })
+
+			err = WriteFrame(stream, ChunkRequest{
+				BlobHash: blobHash,
+				Index:    index,
+			})
+			if err != nil {
+				stop()
+				_ = stream.Close()
+				cancel()
+				lastErr = err
+				continue
+			}
+
+			var resp ChunkResponse
+			err = ReadFrame(stream, &resp)
 			stop()
 			_ = stream.Close()
 			cancel()
-			lastErr = err
-			continue
-		}
 
-		var resp ChunkResponse
-		err = ReadFrame(stream, &resp)
-		stop()
-		_ = stream.Close()
-		cancel()
-
-		if err != nil {
-			lastErr = err
-			continue
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if resp.Error != "" {
+				lastErr = errors.New(resp.Error)
+				continue
+			}
+			if resp.BlobHash != blobHash || resp.Index != index {
+				lastErr = errors.New("mismatched chunk response metadata")
+				continue
+			}
+			return resp.Data, nil
 		}
-		if resp.Error != "" {
-			lastErr = errors.New(resp.Error)
-			continue
-		}
-		if resp.BlobHash != blobHash || resp.Index != index {
-			lastErr = errors.New("mismatched chunk response metadata")
-			continue
-		}
-		return resp.Data, nil
 	}
 
 	if lastErr == nil {

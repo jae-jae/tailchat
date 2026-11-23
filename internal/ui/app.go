@@ -47,21 +47,28 @@ type App struct {
 	joinCodeInput   string
 	pairErr         string
 	joining         bool
+	pairLoading     bool
+	pairGenSeq      uint64
 
 	// Settings & About modal + Clear History confirmation state.
 	settingsOpen       bool
 	settingsTab        int // 0 = General, 1 = Transfer, 2 = Network, 3 = About
 	settingsDraft      SettingsDraft
 	settingsErr        string
+	settingsSaving     bool
 	clearConfirmOpen   bool
 	pendingDirMu       sync.Mutex
 	pendingDownloadDir *string
 
 	// Pending results from background UI operations (applied safely on UI thread).
-	asyncMu           sync.Mutex
-	pendingJoinDone   bool
-	pendingJoinErr    string
-	pendingDevicesErr *string
+	asyncMu              sync.Mutex
+	pendingJoinDone      bool
+	pendingJoinErr       string
+	pendingDevicesErr    *string
+	pendingSettingsDone  bool
+	pendingSettingsErr   string
+	pendingSettingsClose bool
+	pendingPair          *pairGenResult
 
 	// Lazily decoded embedded TailChat app icon for About tab.
 	appIconOnce sync.Once
@@ -173,6 +180,95 @@ func (a *App) Close() {
 	}
 }
 
+type pairGenResult struct {
+	seq       uint64
+	code      string
+	tok       *model.PairingToken
+	bmp       *mygoui.Bitmap
+	errText   string
+	showToast bool
+}
+
+func (a *App) invalidate() {
+	if a.win != nil {
+		a.win.Invalidate()
+		return
+	}
+	if a.state != nil {
+		a.state.notifyInvalidate()
+	}
+}
+
+// drainPendingAsync applies results staged by background goroutines onto UI-thread fields.
+func (a *App) drainPendingAsync() {
+	a.asyncMu.Lock()
+	joinDone := a.pendingJoinDone
+	joinErr := a.pendingJoinErr
+	if joinDone {
+		a.pendingJoinDone = false
+		a.pendingJoinErr = ""
+	}
+	devErr := a.pendingDevicesErr
+	a.pendingDevicesErr = nil
+	settingsDone := a.pendingSettingsDone
+	settingsErr := a.pendingSettingsErr
+	settingsClose := a.pendingSettingsClose
+	if settingsDone {
+		a.pendingSettingsDone = false
+		a.pendingSettingsErr = ""
+		a.pendingSettingsClose = false
+	}
+	pairRes := a.pendingPair
+	a.pendingPair = nil
+	a.asyncMu.Unlock()
+
+	if joinDone {
+		a.joining = false
+		if joinErr != "" {
+			a.pairErr = joinErr
+		} else {
+			a.pairErr = ""
+			a.joinCodeInput = ""
+			a.pairOpen = false
+		}
+	}
+
+	if devErr != nil {
+		a.devicesErr = *devErr
+	}
+
+	if settingsDone {
+		a.settingsSaving = false
+		if settingsErr != "" {
+			a.settingsErr = settingsErr
+		} else {
+			a.settingsErr = ""
+			if settingsClose {
+				a.settingsOpen = false
+			}
+		}
+	}
+
+	if pairRes != nil && pairRes.seq == a.pairGenSeq {
+		a.pairLoading = false
+		if pairRes.errText != "" {
+			a.pairErr = pairRes.errText
+			a.pairQRCode = ""
+			a.pairQRBitmap = nil
+		} else {
+			a.pairErr = ""
+			a.pairCode = pairRes.code
+			a.pairToken = pairRes.tok
+			a.pairQRCode = pairRes.code
+			a.pairQRBitmap = pairRes.bmp
+			a.pairCopiedUntil = time.Time{}
+			if pairRes.showToast {
+				a.state.SetToast(tr(a.state.Locale()).RefreshedQRToast, false)
+			}
+		}
+	}
+}
+
 // OpenPairingModal opens the dedicated 2-tab QR-first Pairing modal (also usable from tray menu and Devices popover).
 func (a *App) OpenPairingModal() {
 	a.openPairingFlow(0)
@@ -189,9 +285,7 @@ func (a *App) openPairingFlow(tab int) {
 	if tab == 0 {
 		a.ensurePairingCode()
 	}
-	if a.win != nil {
-		a.win.Invalidate()
-	}
+	a.invalidate()
 }
 
 func (a *App) isPairingCodeExpired() bool {
@@ -213,39 +307,59 @@ func (a *App) clearPairingCode() {
 }
 
 func (a *App) ensurePairingCode() {
+	if a.pairLoading {
+		return
+	}
 	if a.pairCode == "" || a.isPairingCodeExpired() {
-		a.generatePairingCode(false)
+		a.startPairingCodeGeneration(false, false)
 		return
 	}
 	_ = a.pairingQRBitmap()
 }
 
 func (a *App) generatePairingCode(showToast bool) {
-	code, tok, err := a.state.CreatePairingCode(context.Background(), 300)
-	if err != nil {
-		a.pairErr = err.Error()
-		a.pairQRCode = ""
-		a.pairQRBitmap = nil
-		return
-	}
-	a.pairErr = ""
-	a.pairCode = code
-	a.pairToken = &tok
-	a.pairQRCode = ""
-	a.pairQRBitmap = nil
-	a.pairCopiedUntil = time.Time{}
-	_ = a.pairingQRBitmap()
-	if showToast {
-		a.state.SetToast(tr(a.state.Locale()).RefreshedQRToast, false)
-	}
+	a.startPairingCodeGeneration(false, showToast)
 }
 
 func (a *App) refreshPairingCode() {
-	if a.pairCode != "" {
-		_ = a.state.CancelPairing()
-	}
+	cancelFirst := a.pairCode != ""
 	a.clearPairingCode()
-	a.generatePairingCode(true)
+	a.startPairingCodeGeneration(cancelFirst, true)
+}
+
+func (a *App) startPairingCodeGeneration(cancelFirst, showToast bool) {
+	a.pairGenSeq++
+	seq := a.pairGenSeq
+	a.pairLoading = true
+	a.pairErr = ""
+
+	a.dispatchAsync(func() {
+		if cancelFirst {
+			_ = a.state.CancelPairing()
+		}
+		code, tok, err := a.state.CreatePairingCode(context.Background(), 300)
+		res := &pairGenResult{
+			seq:       seq,
+			showToast: showToast,
+		}
+		if err != nil {
+			res.errText = err.Error()
+		} else {
+			tokCopy := tok
+			res.code = code
+			res.tok = &tokCopy
+			if bmp, qrErr := renderPairingQRBitmap(code, defaultPairingQRSize); qrErr != nil {
+				res.errText = qrErr.Error()
+			} else {
+				res.bmp = bmp
+			}
+		}
+		a.asyncMu.Lock()
+		a.pendingPair = res
+		a.asyncMu.Unlock()
+		a.invalidate()
+	})
+	a.drainPendingAsync()
 }
 
 func (a *App) pairingQRBitmap() *mygoui.Bitmap {
@@ -277,6 +391,8 @@ func (a *App) View(c *mygoui.Context) {
 		a.media.SetInvalidate(svc.Invalidate)
 		a.audio.SetInvalidate(svc.Invalidate)
 	}
+
+	a.drainPendingAsync()
 
 	// Global window shortcuts.
 	c.OnShortcut(mygoui.Cmd, mygoui.KeyF, func() {
@@ -400,7 +516,7 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 						a.focusSearchPending = true
 					} else if a.searchInput != "" {
 						a.searchInput = ""
-						a.state.SetSearchQuery("")
+						a.setSearchQuery("")
 					}
 				}
 
@@ -418,6 +534,7 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 				if zenCircleBtn(c, "btn-settings", iconSettings, t.SettingsAndDERP, a.settingsOpen).Clicked() {
 					a.settingsDraft = NewSettingsDraft(snap.Config)
 					a.settingsErr = ""
+					a.settingsSaving = false
 					a.settingsTab = 0
 					a.clearConfirmOpen = false
 					a.pendingDirMu.Lock()
@@ -468,7 +585,7 @@ func (a *App) renderSearchDrawer(c *mygoui.Context, loc Locale) {
 						a.searchRef.Focus()
 					}
 					if in.Changed() || in.Submitted() {
-						a.state.SetSearchQuery(a.searchInput)
+						a.setSearchQuery(a.searchInput)
 					}
 					if a.searchInput != "" {
 						clearBtn := mygoui.ButtonBase(c.Key("search-clear")).
@@ -484,7 +601,7 @@ func (a *App) renderSearchDrawer(c *mygoui.Context, loc Locale) {
 							})
 						if clearBtn.Clicked() {
 							a.searchInput = ""
-							a.state.SetSearchQuery("")
+							a.setSearchQuery("")
 							a.searchRef.Focus()
 						}
 					}
@@ -900,6 +1017,7 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 
 				mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Shrink(0).Children(func() {
 					blobHash := fb.BlobHash
+					fileSize := fb.FileSize
 					switch {
 					case isLocal:
 						if zenIconPillBtn(c, "reveal-"+msg.MsgID, iconFolderOpen, t.ShowInFolder, false, false).Clicked() {
@@ -907,21 +1025,21 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 						}
 					case hasTask && (task.State == model.TransferRunning || task.State == model.TransferQueued):
 						if zenPillBtn(c, "pause-"+msg.MsgID, t.Pause, false, false).Clicked() {
-							_ = a.state.PauseTransfer(blobHash)
+							a.pauseTransfer(blobHash)
 						}
 						if zenPillBtn(c, "cancel-"+msg.MsgID, t.Cancel, false, false).Clicked() {
-							_ = a.state.CancelTransfer(blobHash)
+							a.cancelTransfer(blobHash)
 						}
 					case hasTask && task.State == model.TransferPaused:
 						if zenPillBtn(c, "resume-"+msg.MsgID, t.Resume, true, false).Clicked() {
-							_ = a.state.DownloadFile(context.Background(), blobHash)
+							a.startDownload(blobHash, fileSize)
 						}
 						if zenPillBtn(c, "cancel-"+msg.MsgID, t.Cancel, false, false).Clicked() {
-							_ = a.state.CancelTransfer(blobHash)
+							a.cancelTransfer(blobHash)
 						}
 					default:
 						if zenPillBtn(c, "dl-"+msg.MsgID, t.DownloadNow, true, false).Clicked() {
-							_ = a.state.DownloadFile(context.Background(), blobHash)
+							a.startDownload(blobHash, fileSize)
 						}
 					}
 				})
@@ -1050,6 +1168,78 @@ func (a *App) dispatchAsync(fn func()) {
 		return
 	}
 	go fn()
+}
+
+func (a *App) startDownload(blobHash string, fileSize int64) {
+	if blobHash == "" {
+		return
+	}
+	a.state.MarkTransferStarting(blobHash, fileSize)
+	a.dispatchAsync(func() {
+		_ = a.state.DownloadFile(context.Background(), blobHash)
+	})
+}
+
+func (a *App) pauseTransfer(blobHash string) {
+	if blobHash == "" {
+		return
+	}
+	a.dispatchAsync(func() {
+		_ = a.state.PauseTransfer(blobHash)
+	})
+}
+
+func (a *App) cancelTransfer(blobHash string) {
+	if blobHash == "" {
+		return
+	}
+	a.dispatchAsync(func() {
+		_ = a.state.CancelTransfer(blobHash)
+	})
+}
+
+func (a *App) setSearchQuery(query string) {
+	trimmed, seq, needRun := a.state.BeginSearchQuery(query)
+	if !needRun {
+		return
+	}
+	a.dispatchAsync(func() {
+		a.state.RunSearchQuery(trimmed, seq)
+	})
+}
+
+func (a *App) applySettingsAsync(cfg model.AppConfig, hotSwitchDERP bool) {
+	if a.settingsSaving {
+		return
+	}
+	a.settingsSaving = true
+	a.settingsErr = ""
+	a.dispatchAsync(func() {
+		err := a.state.ApplySettings(context.Background(), cfg, hotSwitchDERP)
+		a.asyncMu.Lock()
+		a.pendingSettingsDone = true
+		if err != nil {
+			a.pendingSettingsErr = err.Error()
+			a.pendingSettingsClose = false
+		} else {
+			a.pendingSettingsErr = ""
+			a.pendingSettingsClose = true
+		}
+		a.asyncMu.Unlock()
+		a.invalidate()
+	})
+	a.drainPendingAsync()
+}
+
+func (a *App) triggerOpenExternalURL(rawURL string) {
+	if a.openExternalURL == nil || strings.TrimSpace(rawURL) == "" {
+		return
+	}
+	a.dispatchAsync(func() {
+		if err := a.openExternalURL(rawURL); err != nil {
+			a.state.SetToast(tr(a.state.Locale()).OpenURLFailPref+err.Error(), true)
+		}
+	})
 }
 
 func (a *App) submitComposer() {

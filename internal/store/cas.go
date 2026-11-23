@@ -63,7 +63,8 @@ func (c *FileCAS) blobPath(blobHash string) string {
 }
 
 // IngestFile stream-reads srcPath in 1 MiB chunks, computes per-chunk and whole-file BLAKE3 hashes,
-// persists both chunks and the complete blob into CAS, and generates an optional <=32KB PNG thumbnail.
+// persists the complete blob into CAS (ReadChunk slices directly from the complete blob),
+// and generates an optional <=32KB PNG thumbnail.
 func (c *FileCAS) IngestFile(srcPath string) (*model.FileBlob, error) {
 	src, err := os.Open(srcPath)
 	if err != nil {
@@ -125,10 +126,6 @@ func (c *FileCAS) IngestFile(srcPath string) (*model.FileBlob, error) {
 			}
 
 			chunkHashes = append(chunkHashes, model.Blake3Hex(chunk))
-			stagedChunkPath := filepath.Join(stageDir, strconv.Itoa(chunkIdx)+".chk")
-			if err := os.WriteFile(stagedChunkPath, chunk, 0o644); err != nil {
-				return nil, fmt.Errorf("write staged chunk %d: %w", chunkIdx, err)
-			}
 			totalSize += int64(n)
 			chunkIdx++
 		}
@@ -152,20 +149,6 @@ func (c *FileCAS) IngestFile(srcPath string) (*model.FileBlob, error) {
 	}
 	if err := os.Rename(stagedBlobPath, finalBlobPath); err != nil {
 		return nil, fmt.Errorf("commit complete blob: %w", err)
-	}
-
-	if len(chunkHashes) > 0 {
-		finalChunkDir := c.chunkDir(blobHash)
-		if err := os.MkdirAll(finalChunkDir, 0o755); err != nil {
-			return nil, fmt.Errorf("create chunk dir: %w", err)
-		}
-		for i := range chunkHashes {
-			srcChunk := filepath.Join(stageDir, strconv.Itoa(i)+".chk")
-			dstChunk := c.chunkPath(blobHash, i)
-			if err := os.Rename(srcChunk, dstChunk); err != nil {
-				return nil, fmt.Errorf("commit chunk %d: %w", i, err)
-			}
-		}
 	}
 
 	fileName := filepath.Base(srcPath)
@@ -192,7 +175,7 @@ func (c *FileCAS) IngestFile(srcPath string) (*model.FileBlob, error) {
 	}, nil
 }
 
-// IngestBytes persists in-memory bytes as a content-addressed blob and its 1 MiB chunks.
+// IngestBytes persists in-memory bytes as a content-addressed blob and computes its 1 MiB chunk hashes.
 func (c *FileCAS) IngestBytes(fileName, mimeType string, data []byte) (*model.FileBlob, error) {
 	if strings.TrimSpace(fileName) == "" {
 		fileName = "unnamed"
@@ -218,16 +201,12 @@ func (c *FileCAS) IngestBytes(fileName, mimeType string, data []byte) (*model.Fi
 	}
 
 	chunkHashes := make([]string, 0)
-	for offset, idx := 0, 0; offset < len(data); offset, idx = offset+model.DefaultChunkSize, idx+1 {
+	for offset := 0; offset < len(data); offset += model.DefaultChunkSize {
 		end := offset + model.DefaultChunkSize
 		if end > len(data) {
 			end = len(data)
 		}
-		chunk := data[offset:end]
-		chunkHashes = append(chunkHashes, model.Blake3Hex(chunk))
-		if err := atomicWriteFile(c.chunkPath(blobHash, idx), chunk); err != nil {
-			return nil, fmt.Errorf("write chunk %d: %w", idx, err)
-		}
+		chunkHashes = append(chunkHashes, model.Blake3Hex(data[offset:end]))
 	}
 
 	var thumb []byte
@@ -375,6 +354,9 @@ func (c *FileCAS) AssembleFile(blob model.FileBlob, outputDir string) (string, e
 		return "", fmt.Errorf("commit assembled blob: %w", err)
 	}
 	cleanupTmp = false
+	// Complete blob is now committed; ReadChunk serves directly from finalBlobPath,
+	// so reclaim temporary chunk files immediately.
+	_ = os.RemoveAll(c.chunkDir(blob.BlobHash))
 
 	if strings.TrimSpace(outputDir) == "" {
 		return finalBlobPath, nil

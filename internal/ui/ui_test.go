@@ -1429,5 +1429,233 @@ func TestDropFilesDoesNotBlockUIThread(t *testing.T) {
 	t.Fatalf("expected sent-file toast after SendFile unblocked; texts: %v", tt.Texts())
 }
 
+type blockingActionsAPI struct {
+	*mockAppAPI
+	dlStarted   chan string
+	dlMidProg   chan struct{}
+	dlRelease   chan struct{}
+	derpStarted chan model.DERPConfig
+	derpRelease chan struct{}
+	pairStarted chan struct{}
+	pairRelease chan struct{}
+}
+
+func (b *blockingActionsAPI) DownloadFile(ctx context.Context, blobHash string) error {
+	select {
+	case b.dlStarted <- blobHash:
+	default:
+	}
+	<-b.dlMidProg
+	mid := model.TransferTask{
+		BlobHash:   blobHash,
+		Direction:  model.TransferDownload,
+		State:      model.TransferRunning,
+		BytesDone:  2 * 1024 * 1024,
+		BytesTotal: 4 * 1024 * 1024,
+	}
+	b.mu.Lock()
+	b.transfers[blobHash] = mid
+	b.mu.Unlock()
+	b.emit(model.AppEvent{Type: model.EventTransferUpdated, Transfer: &mid})
+
+	<-b.dlRelease
+	done := model.TransferTask{
+		BlobHash:   blobHash,
+		Direction:  model.TransferDownload,
+		State:      model.TransferDone,
+		BytesDone:  4 * 1024 * 1024,
+		BytesTotal: 4 * 1024 * 1024,
+	}
+	b.mu.Lock()
+	b.transfers[blobHash] = done
+	for i := range b.messages {
+		if b.messages[i].File != nil && b.messages[i].File.BlobHash == blobHash {
+			fb := *b.messages[i].File
+			fb.LocalPath = "/tmp/design-spec.pdf"
+			b.messages[i].File = &fb
+		}
+	}
+	b.mu.Unlock()
+	b.emit(model.AppEvent{Type: model.EventTransferUpdated, Transfer: &done})
+	return nil
+}
+
+func (b *blockingActionsAPI) UpdateDERP(ctx context.Context, derp model.DERPConfig) error {
+	select {
+	case b.derpStarted <- derp:
+	default:
+	}
+	<-b.derpRelease
+	return b.mockAppAPI.UpdateDERP(ctx, derp)
+}
+
+func (b *blockingActionsAPI) CreatePairingCode(ctx context.Context, ttlSeconds int) (string, model.PairingToken, error) {
+	select {
+	case b.pairStarted <- struct{}{}:
+	default:
+	}
+	<-b.pairRelease
+	return b.mockAppAPI.CreatePairingCode(ctx, ttlSeconds)
+}
+
+func TestDownloadButtonDoesNotBlockUIThreadAndShowsLiveProgress(t *testing.T) {
+	api := &blockingActionsAPI{
+		mockAppAPI: newMockAppAPI(),
+		dlStarted:  make(chan string, 1),
+		dlMidProg:  make(chan struct{}),
+		dlRelease:  make(chan struct{}),
+	}
+	state := NewState(api)
+	state.Start(context.Background())
+	t.Cleanup(state.Stop)
+
+	// Keep real production async dispatch (go fn()).
+	app := NewApp(state)
+	tt := mygoui.NewTester(app.View, 540, 740)
+	tt.Frame()
+
+	start := time.Now()
+	if err := tt.Click("立即下载"); err != nil {
+		t.Fatalf("click 立即下载: %v", err)
+	}
+	tt.Frame()
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("Download click blocked UI thread for %v", elapsed)
+	}
+
+	// Optimistic TransferRunning state must show Pause/Cancel immediately on frame 0.
+	if !tt.HasText("暂停") || !tt.HasText("取消") {
+		t.Fatalf("expected immediate running controls (暂停/取消) while download is in flight; texts: %v", tt.Texts())
+	}
+
+	select {
+	case gotHash := <-api.dlStarted:
+		if gotHash != "blake3-abc123" {
+			t.Fatalf("expected blake3-abc123, got %q", gotHash)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for background DownloadFile to start")
+	}
+
+	// Stream 50% progress while DownloadFile is still blocked.
+	close(api.dlMidProg)
+	deadline := time.Now().Add(2 * time.Second)
+	sawProgress := false
+	for time.Now().Before(deadline) {
+		tt.Frame()
+		if tt.HasText("2.0 MB / 4.0 MB · 50%") {
+			sawProgress = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !sawProgress {
+		t.Fatalf("expected live progress text '2.0 MB / 4.0 MB · 50%%' during transfer; texts: %v", tt.Texts())
+	}
+
+	// Complete download and verify transition to local file state.
+	close(api.dlRelease)
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		tt.Frame()
+		if tt.HasText("打开所在目录") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected completed file state with 打开所在目录; texts: %v", tt.Texts())
+}
+
+func TestSettingsDERPHotSwitchAndPairingDoNotBlockUIThread(t *testing.T) {
+	api := &blockingActionsAPI{
+		mockAppAPI:  newMockAppAPI(),
+		derpStarted: make(chan model.DERPConfig, 1),
+		derpRelease: make(chan struct{}),
+		pairStarted: make(chan struct{}, 1),
+		pairRelease: make(chan struct{}),
+	}
+	state := NewState(api)
+	state.Start(context.Background())
+	t.Cleanup(state.Stop)
+
+	// Keep real production async dispatch (go fn()).
+	app := NewApp(state)
+	tt := mygoui.NewTester(app.View, 540, 740)
+	tt.Frame()
+
+	// 1. Opening Pairing modal must NOT block while CreatePairingCode is running.
+	start := time.Now()
+	if err := tt.Click("配对"); err != nil {
+		t.Fatalf("click 配对: %v", err)
+	}
+	tt.Frame()
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("opening Pairing modal blocked UI thread for %v", elapsed)
+	}
+	if !tt.HasText("正在生成二维码…") {
+		t.Fatalf("expected async loading placeholder while pairing code generates; texts: %v", tt.Texts())
+	}
+	select {
+	case <-api.pairStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for background CreatePairingCode")
+	}
+
+	close(api.pairRelease)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		tt.Frame()
+		if app.pairQRBitmap != nil && !app.pairLoading {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if app.pairQRBitmap == nil || app.pairLoading {
+		t.Fatalf("expected pairing QR bitmap ready after release; loading=%v bmp=%v", app.pairLoading, app.pairQRBitmap)
+	}
+	if err := tt.Click("关闭"); err != nil {
+		t.Fatalf("close pairing modal: %v", err)
+	}
+	tt.Frame()
+
+	// 2. Clicking "应用并热切 DERP" must NOT block while UpdateDERP runs in background.
+	if err := tt.Click("设置与 DERP"); err != nil {
+		t.Fatalf("open settings: %v", err)
+	}
+	tt.Frame()
+	if err := tt.Click("网络"); err != nil {
+		t.Fatalf("switch to 网络 tab: %v", err)
+	}
+	tt.Frame()
+
+	start = time.Now()
+	if err := tt.Click("应用并热切 DERP"); err != nil {
+		t.Fatalf("click 应用并热切 DERP: %v", err)
+	}
+	tt.Frame()
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("DERP hot-switch blocked UI thread for %v", elapsed)
+	}
+	if !app.settingsSaving {
+		t.Fatalf("expected app.settingsSaving == true while UpdateDERP is in flight")
+	}
+	select {
+	case <-api.derpStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for background UpdateDERP")
+	}
+
+	close(api.derpRelease)
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		tt.Frame()
+		if !app.settingsOpen && !app.settingsSaving {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected settings modal to close after UpdateDERP completed; open=%v saving=%v", app.settingsOpen, app.settingsSaving)
+}
+
 
 

@@ -553,6 +553,7 @@ type AudioSnapshot struct {
 
 // AudioController manages single-track pure-Go audio playback for inline audio messages.
 type AudioController struct {
+	toggleMu   sync.Mutex
 	mu         sync.Mutex
 	activeID   string
 	activePath string
@@ -599,6 +600,9 @@ func (ac *AudioController) Snapshot(msgID string) AudioSnapshot {
 
 // Toggle starts, pauses, or resumes playback for the given audio file message.
 func (ac *AudioController) Toggle(msgID, localPath string) error {
+	ac.toggleMu.Lock()
+	defer ac.toggleMu.Unlock()
+
 	ac.mu.Lock()
 	if ac.activeID == msgID && ac.player != nil {
 		if ac.player.Playing() {

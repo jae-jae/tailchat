@@ -172,13 +172,6 @@ func (d SettingsDraft) ToConfig() (model.AppConfig, error) {
 
 // renderDevicesPopover renders the lightweight Devices-only popover anchored to the header button.
 func (a *App) renderDevicesPopover(c *mygoui.Context, anchor mygoui.Element, snap ViewSnapshot) {
-	a.asyncMu.Lock()
-	if a.pendingDevicesErr != nil {
-		a.devicesErr = *a.pendingDevicesErr
-		a.pendingDevicesErr = nil
-	}
-	a.asyncMu.Unlock()
-
 	t := tr(snap.Locale)
 	mygoui.PopoverBase(c.Key("popover-devices"), anchor, &a.devicesPopoverOpen, func(panel mygoui.Element) {
 		panel.AttachTo(anchor, mygoui.AnchorBottomRight, mygoui.AnchorTopRight).
@@ -271,21 +264,6 @@ func (a *App) renderDevicesPopover(c *mygoui.Context, anchor mygoui.Element, sna
 
 // renderPairingModal renders the dedicated 2-tab QR-first Pairing modal.
 func (a *App) renderPairingModal(c *mygoui.Context, snap ViewSnapshot) {
-	a.asyncMu.Lock()
-	if a.pendingJoinDone {
-		a.joining = false
-		a.pendingJoinDone = false
-		if a.pendingJoinErr != "" {
-			a.pairErr = a.pendingJoinErr
-		} else {
-			a.pairErr = ""
-			a.joinCodeInput = ""
-			a.pairOpen = false
-		}
-		a.pendingJoinErr = ""
-	}
-	a.asyncMu.Unlock()
-
 	t := tr(snap.Locale)
 	mygoui.DialogBase(c.Key("modal-pair"), &a.pairOpen, func(backdrop, panel mygoui.Element) {
 		backdrop.Background(mygoui.RGBA(15, 23, 42, 0.36))
@@ -374,13 +352,13 @@ func (a *App) renderPairTabBtn(c *mygoui.Context, key string, icon *mygoui.SVG, 
 
 func (a *App) renderPairingQRTab(c *mygoui.Context, loc Locale) {
 	t := tr(loc)
-	if a.pairCode == "" && a.pairErr == "" {
+	if !a.pairLoading && a.pairCode == "" && a.pairErr == "" {
 		a.ensurePairingCode()
 	}
 
 	var rem time.Duration
-	expired := a.pairCode == ""
-	if !expired && a.pairToken != nil && a.pairToken.ExpiresAt > 0 {
+	expired := !a.pairLoading && a.pairCode == ""
+	if !a.pairLoading && !expired && a.pairToken != nil && a.pairToken.ExpiresAt > 0 {
 		rem = time.Until(time.UnixMilli(a.pairToken.ExpiresAt))
 		if rem <= 0 {
 			expired = true
@@ -409,7 +387,9 @@ func (a *App) renderPairingQRTab(c *mygoui.Context, loc Locale) {
 				Justify(mygoui.Center).
 				AlignItems(mygoui.Center).
 				Children(func() {
-					if expired {
+					if a.pairLoading {
+						mygoui.Text(c, t.GeneratingQR).FontSize(12).TextColor(zenInkMuted)
+					} else if expired {
 						mygoui.Column(c).Gap(10).AlignItems(mygoui.Center).Children(func() {
 							mygoui.Text(c, t.QRExpired).FontSize(12.5).Bold().TextColor(zenInk).NoWrap()
 							if zenPillBtn(c, "btn-regen-pair", t.Regenerate, true, false).Clicked() {
@@ -425,7 +405,7 @@ func (a *App) renderPairingQRTab(c *mygoui.Context, loc Locale) {
 
 			// Meta status row: countdown pill + mesh hint.
 			mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Justify(mygoui.Center).Children(func() {
-				if !expired {
+				if !a.pairLoading && !expired {
 					if a.pairToken != nil && a.pairToken.ExpiresAt > 0 {
 						c.After(time.Second)
 						mins := int(rem.Minutes())
@@ -445,7 +425,7 @@ func (a *App) renderPairingQRTab(c *mygoui.Context, loc Locale) {
 									NoWrap()
 							})
 					}
-				} else {
+				} else if expired {
 					mygoui.Row(c).
 						Padding(2, 8).
 						Radius(99).
@@ -472,7 +452,7 @@ func (a *App) renderPairingQRTab(c *mygoui.Context, loc Locale) {
 		if copied {
 			c.After(200 * time.Millisecond)
 		}
-		copyDisabled := expired || a.pairCode == ""
+		copyDisabled := a.pairLoading || expired || a.pairCode == ""
 
 		copyBtn := mygoui.ButtonBase(c.Key("btn-copy-pair"))
 		copyBg := zenAccent
@@ -522,12 +502,14 @@ func (a *App) renderPairingQRTab(c *mygoui.Context, loc Locale) {
 		refreshBtn := mygoui.ButtonBase(c.Key("btn-refresh-pair"))
 		refBg := zenSurface
 		refFg := zenInkSecondary
-		if refreshBtn.Pressed() {
-			refBg = zenProgressTrack
-			refFg = zenInk
-		} else if refreshBtn.Hovered() {
-			refBg = zenInputFill
-			refFg = zenInk
+		if !a.pairLoading {
+			if refreshBtn.Pressed() {
+				refBg = zenProgressTrack
+				refFg = zenInk
+			} else if refreshBtn.Hovered() {
+				refBg = zenInputFill
+				refFg = zenInk
+			}
 		}
 		refreshBtn.Size(38, 38).
 			Radius(99).
@@ -535,13 +517,16 @@ func (a *App) renderPairingQRTab(c *mygoui.Context, loc Locale) {
 			Border(1, zenBorderStrong).
 			Justify(mygoui.Center).
 			AlignItems(mygoui.Center).
-			Cursor(mygoui.CursorPointer).
+			Disabled(a.pairLoading).
 			Label(t.RefreshQR).
-			Tooltip(t.RefreshQR).
-			Children(func() {
-				mygoui.Icon(c, iconRefreshCw).Size(15, 15).TextColor(refFg)
-			})
-		if refreshBtn.Clicked() {
+			Tooltip(t.RefreshQR)
+		if !a.pairLoading {
+			refreshBtn.Cursor(mygoui.CursorPointer)
+		}
+		refreshBtn.Children(func() {
+			mygoui.Icon(c, iconRefreshCw).Size(15, 15).TextColor(refFg)
+		})
+		if refreshBtn.Clicked() && !a.pairLoading {
 			a.refreshPairingCode()
 		}
 	})
@@ -975,15 +960,12 @@ func (a *App) renderSettingsNetworkTab(c *mygoui.Context, t uiStrings) {
 			}
 
 			mygoui.Row(c).Gap(8).Justify(mygoui.Start).FillWidth().Children(func() {
-				if zenPillBtn(c, "btn-hotswitch-derp", t.ApplyHotSwitchDERP, false, false).Clicked() {
+				if zenPillBtn(c, "btn-hotswitch-derp", t.ApplyHotSwitchDERP, false, a.settingsSaving).Clicked() && !a.settingsSaving {
 					cfg, err := a.settingsDraft.ToConfig()
 					if err != nil {
 						a.settingsErr = err.Error()
-					} else if err := a.state.ApplySettings(context.Background(), cfg, true); err != nil {
-						a.settingsErr = err.Error()
 					} else {
-						a.settingsErr = ""
-						a.settingsOpen = false
+						a.applySettingsAsync(cfg, true)
 					}
 				}
 			})
@@ -999,18 +981,15 @@ func (a *App) renderSettingsSaveFooter(c *mygoui.Context, t uiStrings) {
 	mygoui.Box(c).Height(1).FillWidth().Background(zenBorder)
 
 	mygoui.Row(c).Gap(8).Justify(mygoui.End).FillWidth().Children(func() {
-		if zenPillBtn(c, "settings-close", t.Close, false, false).Clicked() {
+		if zenPillBtn(c, "settings-close", t.Close, false, a.settingsSaving).Clicked() && !a.settingsSaving {
 			a.settingsOpen = false
 		}
-		if zenPillBtn(c, "btn-save-settings", t.SaveSettings, true, false).Clicked() {
+		if zenPillBtn(c, "btn-save-settings", t.SaveSettings, true, a.settingsSaving).Clicked() && !a.settingsSaving {
 			cfg, err := a.settingsDraft.ToConfig()
 			if err != nil {
 				a.settingsErr = err.Error()
-			} else if err := a.state.ApplySettings(context.Background(), cfg, false); err != nil {
-				a.settingsErr = err.Error()
 			} else {
-				a.settingsErr = ""
-				a.settingsOpen = false
+				a.applySettingsAsync(cfg, false)
 			}
 		}
 	})
@@ -1158,11 +1137,7 @@ func (a *App) renderSettingsAboutTab(c *mygoui.Context, snap ViewSnapshot, t uiS
 				mygoui.Icon(c, iconExternalLink).Size(15, 15).TextColor(zenInkMuted)
 			})
 		if ghBtn.Clicked() {
-			if a.openExternalURL != nil {
-				if err := a.openExternalURL(tailchatGitHubURL); err != nil {
-					a.state.SetToast(t.OpenURLFailPref+err.Error(), true)
-				}
-			}
+			a.triggerOpenExternalURL(tailchatGitHubURL)
 		}
 
 		// Footer on Tab 1.

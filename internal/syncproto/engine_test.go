@@ -620,10 +620,11 @@ type memTransport struct {
 	closed        bool
 	allowed       map[string]model.Device
 	revoked       map[string]bool
-	streamHandler model.PeerStreamHandler
-	statusHandler func(model.PeerConnStatus)
-	pairHandler   model.PairingHandler
-	pairPort      uint16
+	streamHandler  model.PeerStreamHandler
+	statusHandler  func(model.PeerConnStatus)
+	pairHandler    model.PairingHandler
+	pairPort       uint16
+	failChunkOpens atomic.Int32
 }
 
 func newMemTransport(net *memNetwork) *memTransport {
@@ -758,6 +759,18 @@ func (t *memTransport) SyncPeers(peers []model.Device) {
 func (t *memTransport) OpenStream(ctx context.Context, peerDeviceID string, kind model.StreamKind) (io.ReadWriteCloser, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
+	}
+
+	if kind == model.StreamKindChunkData && t.failChunkOpens.Add(-1) >= 0 {
+		c1, c2 := net.Pipe()
+		go func() {
+			// Drain request header then abruptly drop connection to simulate DERP relay unexpected EOF.
+			var req syncproto.ChunkRequest
+			_ = syncproto.ReadFrame(c2, &req)
+			_, _ = c2.Write([]byte{0x00, 0x00, 0x10}) // truncated frame header -> unexpected EOF
+			_ = c2.Close()
+		}()
+		return c1, nil
 	}
 
 	t.mu.RLock()
@@ -1755,3 +1768,80 @@ func TestClearAllMessagesSyncsAcrossPeersAndPreservesFiles(t *testing.T) {
 		t.Fatalf("second A.ClearAllMessages: %v", err)
 	}
 }
+
+func TestDownloadRetriesTransientChunkEOF(t *testing.T) {
+	net := newMemNetwork()
+	ctx := context.Background()
+
+	a := newRealStoreTestNode(t, net, "NodeA", 0)
+	b := newRealStoreTestNode(t, net, "NodeB", 0)
+
+	code, _, err := a.svc.CreatePairingCode(ctx, 60)
+	if err != nil {
+		t.Fatalf("A.CreatePairingCode: %v", err)
+	}
+	if err := b.svc.JoinWithPairingCode(ctx, code); err != nil {
+		t.Fatalf("B.JoinWithPairingCode: %v", err)
+	}
+	waitUntil(t, 3*time.Second, "A and B connected", func() bool {
+		return isPeerConnected(a.svc, b.svc.Identity().DeviceID) &&
+			isPeerConnected(b.svc, a.svc.Identity().DeviceID)
+	})
+
+	// Build a multi-chunk payload (~2.2 MiB -> 3 chunks at 1 MiB each).
+	payload := make([]byte, 2*model.DefaultChunkSize+200*1024)
+	for i := range payload {
+		payload[i] = byte((i*31 + 17) & 0xff)
+	}
+	srcFile := filepath.Join(t.TempDir(), "large-video.bin")
+	if err := os.WriteFile(srcFile, payload, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	fileMsg, err := a.svc.SendFile(ctx, srcFile)
+	if err != nil {
+		t.Fatalf("A.SendFile: %v", err)
+	}
+
+	// Receiver sees the file message metadata immediately before downloading chunks.
+	waitUntil(t, 4*time.Second, "B receives file message metadata before download", func() bool {
+		msgsB, err := b.svc.ListMessages(20, "")
+		if err != nil || len(msgsB) != 1 {
+			return false
+		}
+		return msgsB[0].BlobHash == fileMsg.BlobHash
+	})
+	blobBefore, err := b.store.GetFileBlob(fileMsg.BlobHash)
+	if err != nil || blobBefore == nil {
+		t.Fatalf("GetFileBlob before download: blob=%v err=%v", blobBefore, err)
+	}
+	if blobBefore.LocalPath != "" {
+		t.Fatalf("expected empty LocalPath before manual download, got %q", blobBefore.LocalPath)
+	}
+
+	// Inject 2 transient truncated-frame EOF errors on StreamKindChunkData (simulating DERP relay drops).
+	b.tr.failChunkOpens.Store(2)
+
+	if err := b.svc.DownloadFile(ctx, fileMsg.BlobHash); err != nil {
+		t.Fatalf("B.DownloadFile should succeed via retry after transient EOFs, got: %v", err)
+	}
+	if got := b.tr.failChunkOpens.Load(); got >= 0 {
+		t.Fatalf("expected transient chunk EOF injection to trigger, remaining counter=%d", got)
+	}
+
+	blobAfter, err := b.store.GetFileBlob(fileMsg.BlobHash)
+	if err != nil || blobAfter == nil || blobAfter.LocalPath == "" {
+		t.Fatalf("expected downloaded LocalPath after DownloadFile, blob=%+v err=%v", blobAfter, err)
+	}
+	gotBytes, err := os.ReadFile(blobAfter.LocalPath)
+	if err != nil || !bytes.Equal(gotBytes, payload) {
+		t.Fatalf("downloaded file payload mismatch: err=%v len=%d want=%d", err, len(gotBytes), len(payload))
+	}
+
+	// Verify temporary chunk staging directory was cleaned up after assembly.
+	chunkStageDir := filepath.Join(filepath.Dir(b.dlDir), "cas", "chunks", fileMsg.BlobHash)
+	if _, err := os.Stat(chunkStageDir); !os.IsNotExist(err) {
+		t.Fatalf("expected temporary chunk dir %q to be removed after AssembleFile, stat err=%v", chunkStageDir, err)
+	}
+}
+

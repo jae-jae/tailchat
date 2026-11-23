@@ -436,9 +436,13 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 						mygoui.Icon(c, playIcon).Size(16, 16).TextColor(zenSelfBubbleInk)
 					})
 				if playBtn.Clicked() {
-					if err := a.audio.Toggle(msg.MsgID, fb.LocalPath); err != nil {
-						a.state.SetToast(t.AudioPlayFailPref+err.Error(), true)
-					}
+					msgID := msg.MsgID
+					localPath := fb.LocalPath
+					a.dispatchAsync(func() {
+						if err := a.audio.Toggle(msgID, localPath); err != nil {
+							a.state.SetToast(tr(a.state.Locale()).AudioPlayFailPref+err.Error(), true)
+						}
+					})
 				}
 
 				mygoui.Column(c).Grow(1).MinWidth(0).Clip().Gap(4).Children(func() {
@@ -566,24 +570,25 @@ func (a *App) renderRemoteMediaCard(c *mygoui.Context, snap ViewSnapshot, msg mo
 
 			mygoui.Row(c).Gap(6).Justify(mygoui.End).FillWidth().Children(func() {
 				blobHash := fb.BlobHash
+				fileSize := fb.FileSize
 				switch {
 				case hasTask && (task.State == model.TransferRunning || task.State == model.TransferQueued):
 					if zenPillBtn(c, "pause-m-"+msg.MsgID, t.Pause, false, false).Clicked() {
-						_ = a.state.PauseTransfer(blobHash)
+						a.pauseTransfer(blobHash)
 					}
 					if zenPillBtn(c, "cancel-m-"+msg.MsgID, t.Cancel, false, false).Clicked() {
-						_ = a.state.CancelTransfer(blobHash)
+						a.cancelTransfer(blobHash)
 					}
 				case hasTask && task.State == model.TransferPaused:
 					if zenPillBtn(c, "resume-m-"+msg.MsgID, t.Resume, true, false).Clicked() {
-						_ = a.state.DownloadFile(context.Background(), blobHash)
+						a.startDownload(blobHash, fileSize)
 					}
 					if zenPillBtn(c, "cancel-m-"+msg.MsgID, t.Cancel, false, false).Clicked() {
-						_ = a.state.CancelTransfer(blobHash)
+						a.cancelTransfer(blobHash)
 					}
 				default:
 					if zenPillBtn(c, "dl-m-"+msg.MsgID, downloadCTA, true, false).Clicked() {
-						_ = a.state.DownloadFile(context.Background(), blobHash)
+						a.startDownload(blobHash, fileSize)
 					}
 				}
 			})
@@ -837,9 +842,7 @@ func (a *App) renderUpdateModal(c *mygoui.Context, snap ViewSnapshot) {
 						}
 					} else if up.ReleaseURL != "" {
 						if zenPillBtn(c, "update-btn-download", t.DownloadRelease, true, false).Clicked() {
-							if err := a.openExternalURL(up.ReleaseURL); err != nil {
-								a.state.SetToast(t.OpenURLFailPref+err.Error(), true)
-							}
+							a.triggerOpenExternalURL(up.ReleaseURL)
 						}
 					}
 				})

@@ -43,6 +43,7 @@ type State struct {
 	config          model.AppConfig
 	messages        []model.Message
 	searchQuery     string
+	searchSeq       uint64
 	searchResults   []model.Message
 	devices         []model.Device
 	peers           map[string]model.PeerConnStatus
@@ -255,6 +256,7 @@ func (s *State) handleEvent(ev model.AppEvent) {
 			t := *ev.Transfer
 			s.mu.Lock()
 			s.transfers[t.BlobHash] = t
+			activeSearch := s.searchQuery
 			s.mu.Unlock()
 			if t.State == model.TransferDone {
 				if msgs, err := s.api.ListMessages(200, ""); err == nil {
@@ -262,6 +264,9 @@ func (s *State) handleEvent(ev model.AppEvent) {
 					s.mu.Lock()
 					s.messages = msgs
 					s.mu.Unlock()
+				}
+				if activeSearch != "" {
+					s.refreshSearchLocked(activeSearch)
 				}
 			}
 		}
@@ -514,20 +519,50 @@ func formatConnectivityLabel(loc Locale, onlineCount int, hasDirect, hasDERP boo
 	return fmt.Sprintf(t.ConnDERPF, onlineCount)
 }
 
-// SetSearchQuery updates the live FTS5 search query and reloads matching messages.
+// SetSearchQuery updates the live FTS5 search query and synchronously reloads matching messages.
 func (s *State) SetSearchQuery(query string) {
-	trimmed := strings.TrimSpace(query)
+	trimmed, seq, needRun := s.BeginSearchQuery(query)
+	if !needRun {
+		return
+	}
+	s.RunSearchQuery(trimmed, seq)
+}
+
+// BeginSearchQuery updates the active query string in memory without touching storage,
+// returning a monotonic sequence number so callers can run FTS5 asynchronously without blocking the UI.
+func (s *State) BeginSearchQuery(query string) (trimmed string, seq uint64, needRun bool) {
+	trimmed = strings.TrimSpace(query)
 	s.mu.Lock()
+	s.searchSeq++
+	seq = s.searchSeq
 	s.searchQuery = trimmed
 	if trimmed == "" {
 		s.searchResults = nil
 		s.mu.Unlock()
 		s.notifyInvalidate()
-		return
+		return "", seq, false
 	}
 	s.mu.Unlock()
-	s.refreshSearchLocked(trimmed)
-	s.notifyInvalidate()
+	return trimmed, seq, true
+}
+
+// RunSearchQuery executes an FTS5 search off the UI thread and applies the result only if seq is still current.
+func (s *State) RunSearchQuery(query string, seq uint64) {
+	res, err := s.api.SearchMessages(query, 200)
+	if err != nil {
+		return
+	}
+	sortMessagesAsc(res)
+	applied := false
+	s.mu.Lock()
+	if s.searchSeq == seq && s.searchQuery == query {
+		s.searchResults = res
+		applied = true
+	}
+	s.mu.Unlock()
+	if applied {
+		s.notifyInvalidate()
+	}
 }
 
 func (s *State) refreshSearchLocked(query string) {
@@ -670,9 +705,57 @@ func (s *State) ResolveLocalFile(ctx context.Context, blobHash string) (string, 
 	return path, nil
 }
 
+// MarkTransferStarting optimistically records a TransferRunning state so the UI
+// immediately displays the progress bar and Pause/Cancel controls on the very next frame.
+func (s *State) MarkTransferStarting(blobHash string, totalBytes int64) {
+	if blobHash == "" {
+		return
+	}
+	s.mu.Lock()
+	existing, ok := s.transfers[blobHash]
+	if ok && existing.State == model.TransferDone {
+		s.mu.Unlock()
+		return
+	}
+	task := model.TransferTask{
+		BlobHash:   blobHash,
+		Direction:  model.TransferDownload,
+		State:      model.TransferRunning,
+		BytesTotal: totalBytes,
+		UpdatedAt:  time.Now().UnixMilli(),
+	}
+	if ok {
+		task.ChunkCount = existing.ChunkCount
+		task.ChunkBitmap = existing.ChunkBitmap
+		if existing.State != model.TransferCancelled {
+			task.BytesDone = existing.BytesDone
+		}
+		if existing.BytesTotal > 0 {
+			task.BytesTotal = existing.BytesTotal
+		}
+	}
+	s.transfers[blobHash] = task
+	s.mu.Unlock()
+	s.notifyInvalidate()
+}
+
 // DownloadFile starts or resumes downloading a content-addressed file blob.
 func (s *State) DownloadFile(ctx context.Context, blobHash string) error {
 	if err := s.api.DownloadFile(ctx, blobHash); err != nil {
+		if t, getErr := s.api.GetTransfer(blobHash); getErr == nil && t != nil {
+			s.mu.Lock()
+			s.transfers[blobHash] = *t
+			s.mu.Unlock()
+		} else {
+			s.mu.Lock()
+			if cur, ok := s.transfers[blobHash]; ok && cur.State == model.TransferRunning {
+				cur.State = model.TransferFailed
+				cur.LastError = err.Error()
+				cur.UpdatedAt = time.Now().UnixMilli()
+				s.transfers[blobHash] = cur
+			}
+			s.mu.Unlock()
+		}
 		s.SetToast(tr(s.Locale()).ToastDLFailPref+err.Error(), true)
 		return err
 	}

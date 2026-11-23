@@ -1053,7 +1053,7 @@ func (s *Service) RevokeDevice(ctx context.Context, deviceID string) error {
 
 // Subscribe registers a non-blocking buffered event observer channel.
 func (s *Service) Subscribe() (<-chan model.AppEvent, func()) {
-	ch := make(chan model.AppEvent, 64)
+	ch := make(chan model.AppEvent, 512)
 	s.subsMu.Lock()
 	s.nextSubID++
 	subID := s.nextSubID
