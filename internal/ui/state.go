@@ -615,6 +615,55 @@ func (s *State) DeleteMessage(ctx context.Context, msgID string) error {
 	return nil
 }
 
+// ClearAllMessages clears all chat messages across paired devices while preserving local files.
+func (s *State) ClearAllMessages(ctx context.Context) error {
+	t := tr(s.Locale())
+	if err := s.api.ClearAllMessages(ctx); err != nil {
+		s.SetToast(t.ToastClearFailPref+err.Error(), true)
+		return err
+	}
+	s.mu.Lock()
+	s.messages = nil
+	s.searchResults = nil
+	s.mu.Unlock()
+	s.SetToast(t.ToastHistoryCleared, false)
+	return nil
+}
+
+// ResolveLocalFile resolves the verified local filesystem path for blobHash and updates
+// cached in-memory message metadata if the resolved path changed.
+func (s *State) ResolveLocalFile(ctx context.Context, blobHash string) (string, error) {
+	path, err := s.api.ResolveLocalFile(ctx, blobHash)
+	if err != nil {
+		return "", err
+	}
+	if path != "" {
+		changed := false
+		s.mu.Lock()
+		for i := range s.messages {
+			if fb := s.messages[i].File; fb != nil && fb.BlobHash == blobHash && fb.LocalPath != path {
+				fbCopy := *fb
+				fbCopy.LocalPath = path
+				s.messages[i].File = &fbCopy
+				changed = true
+			}
+		}
+		for i := range s.searchResults {
+			if fb := s.searchResults[i].File; fb != nil && fb.BlobHash == blobHash && fb.LocalPath != path {
+				fbCopy := *fb
+				fbCopy.LocalPath = path
+				s.searchResults[i].File = &fbCopy
+				changed = true
+			}
+		}
+		s.mu.Unlock()
+		if changed {
+			s.notifyInvalidate()
+		}
+	}
+	return path, nil
+}
+
 // DownloadFile starts or resumes downloading a content-addressed file blob.
 func (s *State) DownloadFile(ctx context.Context, blobHash string) error {
 	if err := s.api.DownloadFile(ctx, blobHash); err != nil {

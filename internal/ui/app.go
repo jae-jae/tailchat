@@ -3,8 +3,10 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -45,10 +47,18 @@ type App struct {
 	joinCodeInput   string
 	pairErr         string
 
-	// Settings & DERP modal state.
-	settingsOpen  bool
-	settingsDraft SettingsDraft
-	settingsErr   string
+	// Settings & About modal + Clear History confirmation state.
+	settingsOpen       bool
+	settingsTab        int // 0 = General, 1 = About
+	settingsDraft      SettingsDraft
+	settingsErr        string
+	clearConfirmOpen   bool
+	pendingDirMu       sync.Mutex
+	pendingDownloadDir *string
+
+	// Lazily decoded embedded TailChat app icon for About tab.
+	appIconOnce sync.Once
+	appIconSrc  mygoui.ImageSource
 
 	// Media preview cache, inline audio player, lightbox, and update modal state.
 	media           *MediaCache
@@ -60,11 +70,13 @@ type App struct {
 
 	// Platform integration hooks (overridable in headless tests).
 	openFileDialog     func() ([]string, error)
+	chooseDirDialog    func(defaultDir string) (string, error)
 	readClipboardImage func() []byte
 	readClipboardFiles func() ([]string, error)
 	readClipboardText  func() string
 	writeClipboardText func(text string, concealed bool) error
 	openLocalPath      func(path string) error
+	showInFolder       func(path string) error
 	openExternalURL    func(url string) error
 }
 
@@ -81,6 +93,22 @@ func NewApp(state *State) *App {
 			Title:    tr(a.state.Locale()).SelectFilesTitle,
 			Multiple: true,
 		})
+	}
+	a.chooseDirDialog = func(defaultDir string) (string, error) {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent:            a.win,
+			Title:             tr(a.state.Locale()).ChooseDirTitle,
+			DefaultPath:       strings.TrimSpace(defaultDir),
+			Directory:         true,
+			CreateDirectories: true,
+		})
+		if err != nil {
+			return "", err
+		}
+		if len(paths) == 0 {
+			return "", nil
+		}
+		return paths[0], nil
 	}
 	a.readClipboardImage = func() []byte {
 		return mygo.Clipboard.ReadImage()
@@ -100,6 +128,16 @@ func NewApp(state *State) *App {
 	}
 	a.openLocalPath = func(path string) error {
 		return mygo.Shell.OpenPath(path)
+	}
+	a.showInFolder = func(path string) error {
+		if strings.TrimSpace(path) == "" {
+			return fmt.Errorf("empty file path")
+		}
+		if _, err := os.Stat(path); err != nil {
+			return err
+		}
+		mygo.Shell.ShowItemInFolder(path)
+		return nil
 	}
 	a.openExternalURL = func(url string) error {
 		return mygo.Shell.OpenExternal(url)
@@ -136,6 +174,7 @@ func (a *App) openPairingFlow(tab int) {
 	a.devicesErr = ""
 	a.devicesPopoverOpen = false
 	a.settingsOpen = false
+	a.clearConfirmOpen = false
 	a.pairTab = tab
 	a.pairOpen = true
 	if tab == 0 {
@@ -288,12 +327,13 @@ func (a *App) View(c *mygoui.Context) {
 	a.renderDevicesPopover(c, devicesBtn, snap)
 	a.renderPairingModal(c, snap)
 	a.renderSettingsModal(c, snap)
+	a.renderClearConfirmModal(c, snap)
 	a.renderLightboxModal(c, snap)
 	a.renderUpdateModal(c, snap)
 }
 
 func (a *App) anyOverlayOpen() bool {
-	return a.devicesPopoverOpen || a.pairOpen || a.settingsOpen || a.lightboxOpen || a.updateModalOpen
+	return a.devicesPopoverOpen || a.pairOpen || a.settingsOpen || a.clearConfirmOpen || a.lightboxOpen || a.updateModalOpen
 }
 
 func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element {
@@ -360,6 +400,7 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 					if a.devicesPopoverOpen {
 						a.pairOpen = false
 						a.settingsOpen = false
+						a.clearConfirmOpen = false
 						a.devicesErr = ""
 					}
 				}
@@ -367,6 +408,11 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 				if zenCircleBtn(c, "btn-settings", iconSettings, t.SettingsAndDERP, a.settingsOpen).Clicked() {
 					a.settingsDraft = NewSettingsDraft(snap.Config)
 					a.settingsErr = ""
+					a.settingsTab = 0
+					a.clearConfirmOpen = false
+					a.pendingDirMu.Lock()
+					a.pendingDownloadDir = nil
+					a.pendingDirMu.Unlock()
 					a.devicesPopoverOpen = false
 					a.pairOpen = false
 					a.settingsOpen = true
@@ -740,7 +786,7 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 		Shadow(0, 3, 12, 0, mygoui.RGBA(15, 23, 42, 0.06)).
 		Children(func() {
 			// File header: extension tile + filename & metadata.
-			mygoui.Row(c).Gap(11).AlignItems(mygoui.Center).FillWidth().Children(func() {
+			renderHeaderContent := func() {
 				mygoui.Row(c).
 					Size(44, 44).
 					Radius(12).
@@ -768,7 +814,33 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 						NoWrap().
 						Ellipsis("…")
 				})
-			})
+			}
+
+			if isLocal {
+				headerBtn := mygoui.ButtonBase(c.Key("open-direct-" + msg.MsgID))
+				hdrBg := mygoui.RGBA(0, 0, 0, 0)
+				if headerBtn.Pressed() {
+					hdrBg = zenInputFill
+				} else if headerBtn.Hovered() {
+					hdrBg = zenSurfaceSubtle
+				}
+				headerBtn.Gap(11).
+					Padding(4).
+					Radius(12).
+					Background(hdrBg).
+					Justify(mygoui.Start).
+					AlignItems(mygoui.Center).
+					FillWidth().
+					Cursor(mygoui.CursorPointer).
+					Label(t.OpenFileDirectly).
+					Tooltip(t.OpenFileDirectly).
+					Children(renderHeaderContent)
+				if headerBtn.Clicked() {
+					a.openFileDirectly(fb)
+				}
+			} else {
+				mygoui.Row(c).Gap(11).AlignItems(mygoui.Center).FillWidth().Children(renderHeaderContent)
+			}
 
 			// Sleek 6px rounded progress track when actively transferring/paused/failed.
 			if showProgress {
@@ -813,11 +885,9 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 				mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
 					blobHash := fb.BlobHash
 					switch {
-					case isLocal && fb.LocalPath != "":
-						if zenPillBtn(c, "open-"+msg.MsgID, t.OpenFile, false, false).Clicked() {
-							if err := a.openLocalPath(fb.LocalPath); err != nil {
-								a.state.SetToast(t.OpenFileFailedPref+err.Error(), true)
-							}
+					case isLocal:
+						if zenIconPillBtn(c, "reveal-"+msg.MsgID, iconFolderOpen, t.ShowInFolder, false, false).Clicked() {
+							a.revealFileInManager(fb)
 						}
 					case hasTask && (task.State == model.TransferRunning || task.State == model.TransferQueued):
 						if zenPillBtn(c, "pause-"+msg.MsgID, t.Pause, false, false).Clicked() {
@@ -1032,6 +1102,71 @@ func (a *App) handleDrop(drop transfer.Drop) {
 			a.composer += "\n" + string(b)
 		}
 	}
+}
+
+func (a *App) resolveFilePath(fb *model.FileBlob) (string, error) {
+	if fb == nil {
+		return "", fmt.Errorf("missing file metadata")
+	}
+	if fb.BlobHash != "" {
+		path, err := a.state.ResolveLocalFile(context.Background(), fb.BlobHash)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(path) != "" {
+			return path, nil
+		}
+	}
+	if strings.TrimSpace(fb.LocalPath) != "" {
+		return fb.LocalPath, nil
+	}
+	return "", fmt.Errorf("local file unavailable")
+}
+
+func (a *App) openFileDirectly(fb *model.FileBlob) {
+	t := tr(a.state.Locale())
+	path, err := a.resolveFilePath(fb)
+	if err != nil {
+		a.state.SetToast(t.OpenFileFailedPref+err.Error(), true)
+		return
+	}
+	if a.openLocalPath == nil {
+		return
+	}
+	if err := a.openLocalPath(path); err != nil {
+		a.state.SetToast(t.OpenFileFailedPref+err.Error(), true)
+	}
+}
+
+func (a *App) revealFileInManager(fb *model.FileBlob) {
+	t := tr(a.state.Locale())
+	path, err := a.resolveFilePath(fb)
+	if err != nil {
+		a.state.SetToast(t.ShowInFolderFailPref+err.Error(), true)
+		return
+	}
+	if a.showInFolder == nil {
+		return
+	}
+	if err := a.showInFolder(path); err != nil {
+		a.state.SetToast(t.ShowInFolderFailPref+err.Error(), true)
+	}
+}
+
+func (a *App) appIcon() mygoui.ImageSource {
+	a.appIconOnce.Do(func() {
+		if len(dockIconPNG) == 0 {
+			return
+		}
+		if bmp, err := mygoui.DecodeBitmapScaled(dockIconPNG, 136); err == nil && bmp != nil {
+			a.appIconSrc = bmp
+			return
+		}
+		if bmp, err := mygoui.DecodeBitmap(dockIconPNG); err == nil && bmp != nil {
+			a.appIconSrc = bmp
+		}
+	})
+	return a.appIconSrc
 }
 
 func deviceIconForAuthor(deviceID string, devices []model.Device) *mygoui.SVG {

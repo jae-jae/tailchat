@@ -153,12 +153,15 @@ type uiStrings struct {
 	ResumableTransfer  string
 	TransferRetryHint  string
 	TransferProgress   string
-	OpenFile           string
-	Pause              string
-	Cancel             string
-	Resume             string
-	DownloadNow        string
-	OpenFileFailedPref string
+	OpenFile             string
+	OpenFileDirectly     string
+	ShowInFolder         string
+	Pause                string
+	Cancel               string
+	Resume               string
+	DownloadNow          string
+	OpenFileFailedPref   string
+	ShowInFolderFailPref string
 
 	// Composer
 	DropStripIdle      string
@@ -179,14 +182,14 @@ type uiStrings struct {
 	ClipboardEmpty     string
 
 	// Devices popover
-	OnlyThisDevice     string
-	OnlineCountBadgeF  string
-	NoPairedDevices    string
-	Offline            string
-	P2PDirect          string
-	DERPRelay          string
-	Connecting         string
-	Remove             string
+	OnlyThisDevice    string
+	OnlineCountBadgeF string
+	NoPairedDevices   string
+	Offline           string
+	P2PDirect         string
+	DERPRelay         string
+	Connecting        string
+	Remove            string
 
 	// Pairing modal
 	PairDeviceTitle    string
@@ -216,6 +219,9 @@ type uiStrings struct {
 	JoinNow            string
 
 	// Settings modal
+	SettingsTitle      string
+	TabGeneral         string
+	TabAbout           string
 	CloseSettings      string
 	DeviceName         string
 	MyDevicePlace      string
@@ -223,6 +229,12 @@ type uiStrings struct {
 	LanguageAuto       string
 	LanguageEnglish    string
 	LanguageChinese    string
+	DownloadDirLabel   string
+	DownloadDirPlace   string
+	DownloadDirHint    string
+	BrowseDir          string
+	ChooseDirTitle     string
+	ChooseDirFailPref  string
 	DERPServer         string
 	DERPModeLabel      string
 	DERPDefault        string
@@ -238,6 +250,14 @@ type uiStrings struct {
 	AutoDownloadMB     string
 	DownloadLimitKBs   string
 	MinimizeToTray     string
+	ClearHistoryTitle  string
+	ClearHistoryNote   string
+	ClearAllBtn        string
+	ClearConfirmTitle  string
+	ClearConfirmBody   string
+	ClearConfirmOK     string
+	AppTagline         string
+	GitHubRepoLabel    string
 	SaveSettings       string
 
 	// Settings validation errors
@@ -250,37 +270,39 @@ type uiStrings struct {
 	ErrNeedDERPMapURL  string
 
 	// State toasts & errors
-	ConnOffline        string
-	ConnDirectDERPF    string
-	ConnDirectF        string
-	ConnDERPF          string
-	ToastSendFailPref  string
-	ToastFileFailPref  string
-	ToastFileSentPref  string
-	ToastPasteFailPref string
-	ToastSentPref      string
-	ToastDelFailPref   string
-	ToastDLFailPref    string
-	ToastPauseFailPref string
-	ToastCancelFailPre string
-	ToastPairFailPref  string
-	ErrEmptyPairCode   string
-	ToastJoinFailPref  string
-	ToastJoinedGroup   string
-	ToastRevokeFailPre string
-	ToastRevokedDevice string
-	ToastSaveFailPref  string
-	ToastDERPFailPref  string
-	ToastDERPSwitched  string
-	ToastSettingsSaved string
+	ConnOffline         string
+	ConnDirectDERPF     string
+	ConnDirectF         string
+	ConnDERPF           string
+	ToastSendFailPref   string
+	ToastFileFailPref   string
+	ToastFileSentPref   string
+	ToastPasteFailPref  string
+	ToastSentPref       string
+	ToastDelFailPref    string
+	ToastClearFailPref  string
+	ToastHistoryCleared string
+	ToastDLFailPref     string
+	ToastPauseFailPref  string
+	ToastCancelFailPre  string
+	ToastPairFailPref   string
+	ErrEmptyPairCode    string
+	ToastJoinFailPref   string
+	ToastJoinedGroup    string
+	ToastRevokeFailPre  string
+	ToastRevokedDevice  string
+	ToastSaveFailPref   string
+	ToastDERPFailPref   string
+	ToastDERPSwitched   string
+	ToastSettingsSaved  string
 
 	// Desktop tray & notifications
-	TrayShowHide       string
-	TrayQuickPair      string
-	TrayQuit           string
-	TrayTooltip        string
-	NotifySharedFileF  string
-	NotifyNewMessage   string
+	TrayShowHide      string
+	TrayQuickPair     string
+	TrayQuit          string
+	TrayTooltip       string
+	NotifySharedFileF string
+	NotifyNewMessage  string
 
 	// Auto-update
 	SoftwareUpdates       string
@@ -353,12 +375,15 @@ var stringsEN = uiStrings{
 	ResumableTransfer:  "Resumable transfer",
 	TransferRetryHint:  "Interrupted · Retry anytime",
 	TransferProgress:   "Transfer progress",
-	OpenFile:           "Open",
-	Pause:              "Pause",
-	Cancel:             "Cancel",
-	Resume:             "Resume",
-	DownloadNow:        "Download",
-	OpenFileFailedPref: "Failed to open file: ",
+	OpenFile:             "Open",
+	OpenFileDirectly:     "Click to open file",
+	ShowInFolder:         "Show in Folder",
+	Pause:                "Pause",
+	Cancel:               "Cancel",
+	Resume:               "Resume",
+	DownloadNow:          "Download",
+	OpenFileFailedPref:   "Failed to open file: ",
+	ShowInFolderFailPref: "Failed to reveal file: ",
 
 	DropStripIdle:      "Drop files here or paste screenshots to broadcast to all devices",
 	DropStripActive:    "Release to broadcast files to all devices",
@@ -377,14 +402,14 @@ var stringsEN = uiStrings{
 	OpenDialogFailPref: "Failed to open file picker: ",
 	ClipboardEmpty:     "Clipboard has no image, file, or text to send",
 
-	OnlyThisDevice:     "This device",
-	OnlineCountBadgeF:  "%d online",
-	NoPairedDevices:    "No paired devices yet",
-	Offline:            "Offline",
-	P2PDirect:          "P2P Direct",
-	DERPRelay:          "DERP Relay",
-	Connecting:         "Connecting…",
-	Remove:             "Remove",
+	OnlyThisDevice:    "This device",
+	OnlineCountBadgeF: "%d online",
+	NoPairedDevices:   "No paired devices yet",
+	Offline:           "Offline",
+	P2PDirect:         "P2P Direct",
+	DERPRelay:         "DERP Relay",
+	Connecting:        "Connecting…",
+	Remove:            "Remove",
 
 	PairDeviceTitle:    "Pair Device",
 	Close:              "Close",
@@ -412,6 +437,9 @@ var stringsEN = uiStrings{
 	PastedPairCode:     "Pairing code pasted from clipboard",
 	JoinNow:            "Join Now",
 
+	SettingsTitle:      "Settings",
+	TabGeneral:         "General",
+	TabAbout:           "About",
 	CloseSettings:      "Close settings",
 	DeviceName:         "Device Name",
 	MyDevicePlace:      "My Device",
@@ -419,6 +447,12 @@ var stringsEN = uiStrings{
 	LanguageAuto:       "Auto",
 	LanguageEnglish:    "English",
 	LanguageChinese:    "中文",
+	DownloadDirLabel:   "File Storage Path",
+	DownloadDirPlace:   "~/Downloads",
+	DownloadDirHint:    "Received files are saved here; leave empty for default",
+	BrowseDir:          "Browse",
+	ChooseDirTitle:     "Choose File Storage Folder",
+	ChooseDirFailPref:  "Failed to choose folder: ",
 	DERPServer:         "DERP Relay Server",
 	DERPModeLabel:      "DERP Mode",
 	DERPDefault:        "Default tailcat",
@@ -434,6 +468,14 @@ var stringsEN = uiStrings{
 	AutoDownloadMB:     "Auto-download (MB)",
 	DownloadLimitKBs:   "Speed limit (KB/s)",
 	MinimizeToTray:     "Minimize to tray when closing window",
+	ClearHistoryTitle:  "Clear All Chat History",
+	ClearHistoryNote:   "Clears chat history across all paired devices; local files stay intact",
+	ClearAllBtn:        "Clear All",
+	ClearConfirmTitle:  "Clear all chat history?",
+	ClearConfirmBody:   "This will sync and clear chat history on this device and all paired devices, while keeping locally saved files.",
+	ClearConfirmOK:     "Clear All",
+	AppTagline:         "Private P2P Device Mesh",
+	GitHubRepoLabel:    "GitHub",
 	SaveSettings:       "Save",
 
 	ErrInvalidRegionID: "Invalid Region ID",
@@ -444,29 +486,31 @@ var stringsEN = uiStrings{
 	ErrNeedCustomHost:  "Please enter a self-hosted derper hostname or IP",
 	ErrNeedDERPMapURL:  "Please enter a custom DERPMap URL",
 
-	ConnOffline:        "Offline · Waiting for peers",
-	ConnDirectDERPF:    "%d online · P2P Direct + DERP",
-	ConnDirectF:        "%d online · P2P Direct",
-	ConnDERPF:          "%d online · DERP Relay",
-	ToastSendFailPref:  "Send failed: ",
-	ToastFileFailPref:  "File send failed: ",
-	ToastFileSentPref:  "Sent file: ",
-	ToastPasteFailPref: "Failed to send pasted content: ",
-	ToastSentPref:      "Sent ",
-	ToastDelFailPref:   "Delete failed: ",
-	ToastDLFailPref:    "Download failed: ",
-	ToastPauseFailPref: "Pause failed: ",
-	ToastCancelFailPre: "Cancel failed: ",
-	ToastPairFailPref:  "Failed to create pairing code: ",
-	ErrEmptyPairCode:   "Pairing code cannot be empty",
-	ToastJoinFailPref:  "Failed to join group: ",
-	ToastJoinedGroup:   "Joined device group",
-	ToastRevokeFailPre: "Failed to remove device: ",
-	ToastRevokedDevice: "Device removed",
-	ToastSaveFailPref:  "Failed to save settings: ",
-	ToastDERPFailPref:  "Failed to switch DERP: ",
-	ToastDERPSwitched:  "DERP server switched",
-	ToastSettingsSaved: "Settings saved",
+	ConnOffline:         "Offline · Waiting for peers",
+	ConnDirectDERPF:     "%d online · P2P Direct + DERP",
+	ConnDirectF:         "%d online · P2P Direct",
+	ConnDERPF:           "%d online · DERP Relay",
+	ToastSendFailPref:   "Send failed: ",
+	ToastFileFailPref:   "File send failed: ",
+	ToastFileSentPref:   "Sent file: ",
+	ToastPasteFailPref:  "Failed to send pasted content: ",
+	ToastSentPref:       "Sent ",
+	ToastDelFailPref:    "Delete failed: ",
+	ToastClearFailPref:  "Failed to clear chat history: ",
+	ToastHistoryCleared: "Chat history cleared",
+	ToastDLFailPref:     "Download failed: ",
+	ToastPauseFailPref:  "Pause failed: ",
+	ToastCancelFailPre:  "Cancel failed: ",
+	ToastPairFailPref:   "Failed to create pairing code: ",
+	ErrEmptyPairCode:    "Pairing code cannot be empty",
+	ToastJoinFailPref:   "Failed to join group: ",
+	ToastJoinedGroup:    "Joined device group",
+	ToastRevokeFailPre:  "Failed to remove device: ",
+	ToastRevokedDevice:  "Device removed",
+	ToastSaveFailPref:   "Failed to save settings: ",
+	ToastDERPFailPref:   "Failed to switch DERP: ",
+	ToastDERPSwitched:   "DERP server switched",
+	ToastSettingsSaved:  "Settings saved",
 
 	TrayShowHide:       "Show / Hide TailChat",
 	TrayQuickPair:      "Quick Pair…",
@@ -544,12 +588,15 @@ var stringsZH = uiStrings{
 	ResumableTransfer:  "支持断点续传",
 	TransferRetryHint:  "传输中断 · 可重新下载",
 	TransferProgress:   "传输进度",
-	OpenFile:           "打开文件",
-	Pause:              "暂停",
-	Cancel:             "取消",
-	Resume:             "继续",
-	DownloadNow:        "立即下载",
-	OpenFileFailedPref: "无法打开文件：",
+	OpenFile:             "打开文件",
+	OpenFileDirectly:     "点击直接打开文件",
+	ShowInFolder:         "打开所在目录",
+	Pause:                "暂停",
+	Cancel:               "取消",
+	Resume:               "继续",
+	DownloadNow:          "立即下载",
+	OpenFileFailedPref:   "无法打开文件：",
+	ShowInFolderFailPref: "无法打开所在目录：",
 
 	DropStripIdle:      "拖入任意文件到此窗口，或点击粘贴截图广播给所有设备",
 	DropStripActive:    "松开鼠标立即广播文件给所有设备",
@@ -568,14 +615,14 @@ var stringsZH = uiStrings{
 	OpenDialogFailPref: "打开文件选择器失败：",
 	ClipboardEmpty:     "剪贴板中没有可发送的图片、文件或文字",
 
-	OnlyThisDevice:     "仅本机",
-	OnlineCountBadgeF:  "%d 台在线",
-	NoPairedDevices:    "暂无已配对设备",
-	Offline:            "离线",
-	P2PDirect:          "P2P 直连",
-	DERPRelay:          "DERP 中继",
-	Connecting:         "正在连接…",
-	Remove:             "移除",
+	OnlyThisDevice:    "仅本机",
+	OnlineCountBadgeF: "%d 台在线",
+	NoPairedDevices:   "暂无已配对设备",
+	Offline:           "离线",
+	P2PDirect:         "P2P 直连",
+	DERPRelay:         "DERP 中继",
+	Connecting:        "正在连接…",
+	Remove:            "移除",
 
 	PairDeviceTitle:    "配对设备",
 	Close:              "关闭",
@@ -603,6 +650,9 @@ var stringsZH = uiStrings{
 	PastedPairCode:     "已从剪贴板填入配对码",
 	JoinNow:            "立即加入",
 
+	SettingsTitle:      "设置",
+	TabGeneral:         "通用",
+	TabAbout:           "关于",
 	CloseSettings:      "关闭设置",
 	DeviceName:         "设备名称",
 	MyDevicePlace:      "我的设备",
@@ -610,6 +660,12 @@ var stringsZH = uiStrings{
 	LanguageAuto:       "自动",
 	LanguageEnglish:    "English",
 	LanguageChinese:    "中文",
+	DownloadDirLabel:   "文件存储路径",
+	DownloadDirPlace:   "~/Downloads",
+	DownloadDirHint:    "接收的文件将保存到此目录，留空使用默认下载目录",
+	BrowseDir:          "选择目录",
+	ChooseDirTitle:     "选择文件存储目录",
+	ChooseDirFailPref:  "选择目录失败：",
 	DERPServer:         "DERP 中继服务器",
 	DERPModeLabel:      "DERP 模式",
 	DERPDefault:        "默认 tailcat",
@@ -625,6 +681,14 @@ var stringsZH = uiStrings{
 	AutoDownloadMB:     "自动下载阈值 (MB)",
 	DownloadLimitKBs:   "下载限速 (KB/s)",
 	MinimizeToTray:     "关闭窗口时最小化到托盘",
+	ClearHistoryTitle:  "清空所有聊天记录",
+	ClearHistoryNote:   "同步清空所有配对设备的聊天记录，本地文件不受影响",
+	ClearAllBtn:        "一键清空",
+	ClearConfirmTitle:  "确认清空所有聊天记录？",
+	ClearConfirmBody:   "此操作将同步清空当前设备及所有已配对设备的聊天记录，但会保留本地已保存的文件。",
+	ClearConfirmOK:     "确认清空",
+	AppTagline:         "私有 P2P 设备互联",
+	GitHubRepoLabel:    "GitHub",
 	SaveSettings:       "保存设置",
 
 	ErrInvalidRegionID: "Region ID 无效",
@@ -635,29 +699,31 @@ var stringsZH = uiStrings{
 	ErrNeedCustomHost:  "请输入自建 derper 服务器域名或 IP",
 	ErrNeedDERPMapURL:  "请输入自定义 DERPMap URL",
 
-	ConnOffline:        "离线 · 等待设备连接",
-	ConnDirectDERPF:    "%d 台设备在线 · P2P 直连 + DERP",
-	ConnDirectF:        "%d 台设备在线 · P2P 直连",
-	ConnDERPF:          "%d 台设备在线 · DERP 中继",
-	ToastSendFailPref:  "发送失败：",
-	ToastFileFailPref:  "发送文件失败：",
-	ToastFileSentPref:  "已发送文件：",
-	ToastPasteFailPref: "发送粘贴内容失败：",
-	ToastSentPref:      "已发送 ",
-	ToastDelFailPref:   "删除失败：",
-	ToastDLFailPref:    "下载失败：",
-	ToastPauseFailPref: "暂停失败：",
-	ToastCancelFailPre: "取消失败：",
-	ToastPairFailPref:  "生成配对码失败：",
-	ErrEmptyPairCode:   "配对码不能为空",
-	ToastJoinFailPref:  "加入设备群失败：",
-	ToastJoinedGroup:   "已加入设备群",
-	ToastRevokeFailPre: "移除设备失败：",
-	ToastRevokedDevice: "已移除设备",
-	ToastSaveFailPref:  "保存设置失败：",
-	ToastDERPFailPref:  "DERP 切换失败：",
-	ToastDERPSwitched:  "已切换 DERP 服务器",
-	ToastSettingsSaved: "设置已保存",
+	ConnOffline:         "离线 · 等待设备连接",
+	ConnDirectDERPF:     "%d 台设备在线 · P2P 直连 + DERP",
+	ConnDirectF:         "%d 台设备在线 · P2P 直连",
+	ConnDERPF:           "%d 台设备在线 · DERP 中继",
+	ToastSendFailPref:   "发送失败：",
+	ToastFileFailPref:   "发送文件失败：",
+	ToastFileSentPref:   "已发送文件：",
+	ToastPasteFailPref:  "发送粘贴内容失败：",
+	ToastSentPref:       "已发送 ",
+	ToastDelFailPref:    "删除失败：",
+	ToastClearFailPref:  "清空聊天记录失败：",
+	ToastHistoryCleared: "已清空所有聊天记录",
+	ToastDLFailPref:     "下载失败：",
+	ToastPauseFailPref:  "暂停失败：",
+	ToastCancelFailPre:  "取消失败：",
+	ToastPairFailPref:   "生成配对码失败：",
+	ErrEmptyPairCode:    "配对码不能为空",
+	ToastJoinFailPref:   "加入设备群失败：",
+	ToastJoinedGroup:    "已加入设备群",
+	ToastRevokeFailPre:  "移除设备失败：",
+	ToastRevokedDevice:  "已移除设备",
+	ToastSaveFailPref:   "保存设置失败：",
+	ToastDERPFailPref:   "DERP 切换失败：",
+	ToastDERPSwitched:   "已切换 DERP 服务器",
+	ToastSettingsSaved:  "设置已保存",
 
 	TrayShowHide:       "显示 / 隐藏 TailChat",
 	TrayQuickPair:      "快速配对…",

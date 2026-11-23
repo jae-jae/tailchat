@@ -87,6 +87,8 @@ func (s *stubAppAPI) Config() model.AppConfig                                  {
 func (s *stubAppAPI) UpdateConfig(context.Context, model.AppConfig) error      { return nil }
 func (s *stubAppAPI) UpdateDERP(context.Context, model.DERPConfig) error       { return nil }
 func (s *stubAppAPI) DeleteMessage(context.Context, string) error              { return nil }
+func (s *stubAppAPI) ClearAllMessages(context.Context) error                   { return nil }
+func (s *stubAppAPI) ResolveLocalFile(context.Context, string) (string, error) { return "", nil }
 func (s *stubAppAPI) ListMessages(int, string) ([]model.Message, error)        { return nil, nil }
 func (s *stubAppAPI) SearchMessages(string, int) ([]model.Message, error)      { return nil, nil }
 func (s *stubAppAPI) DownloadFile(context.Context, string) error               { return nil }

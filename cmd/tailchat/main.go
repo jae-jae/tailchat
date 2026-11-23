@@ -32,7 +32,7 @@ func main() {
 
 	dbPath := filepath.Join(*dataDir, "tailchat.db")
 	casDir := filepath.Join(*dataDir, "cas")
-	downloadDir := filepath.Join(*dataDir, "downloads")
+	downloadDir := defaultDownloadDir(*dataDir)
 	if err := os.MkdirAll(downloadDir, 0o755); err != nil {
 		log.Fatalf("tailchat: create downloads dir %q: %v", downloadDir, err)
 	}
@@ -85,6 +85,16 @@ func defaultAppDataDir() string {
 		return filepath.Join(home, ".tailchat")
 	}
 	return ".tailchat-data"
+}
+
+func defaultDownloadDir(fallbackDataDir string) string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		dir := filepath.Join(home, "Downloads")
+		if err := os.MkdirAll(dir, 0o755); err == nil {
+			return dir
+		}
+	}
+	return filepath.Join(fallbackDataDir, "downloads")
 }
 
 func runtimePlatform() string {

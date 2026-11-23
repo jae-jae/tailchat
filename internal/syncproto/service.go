@@ -5,9 +5,13 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path"
+	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -320,8 +324,24 @@ func (s *Service) UpdateConfig(ctx context.Context, cfg model.AppConfig) error {
 	if cfg.DeviceName == "" {
 		cfg.DeviceName = oldCfg.DeviceName
 	}
-	if cfg.DownloadDir == "" {
+	rawDownloadDir := cfg.DownloadDir
+	trimmedDownloadDir := strings.TrimSpace(rawDownloadDir)
+	if trimmedDownloadDir == "" {
 		cfg.DownloadDir = oldCfg.DownloadDir
+		if strings.TrimSpace(cfg.DownloadDir) == "" {
+			cfg.DownloadDir = s.opts.DownloadDir
+		}
+	} else {
+		expanded, err := expandAndCleanDir(trimmedDownloadDir)
+		if err != nil {
+			return fmt.Errorf("invalid download directory %q: %w", rawDownloadDir, err)
+		}
+		cfg.DownloadDir = expanded
+		if cfg.DownloadDir != oldCfg.DownloadDir || rawDownloadDir != cfg.DownloadDir {
+			if err := ensureWritableDir(cfg.DownloadDir); err != nil {
+				return fmt.Errorf("invalid download directory %q: %w", cfg.DownloadDir, err)
+			}
+		}
 	}
 	if cfg.DERP.Mode == "" {
 		cfg.DERP = oldCfg.DERP
@@ -481,10 +501,23 @@ func (s *Service) SendFile(ctx context.Context, filePath string) (*model.Message
 	if err := s.requireStarted(); err != nil {
 		return nil, err
 	}
-	blob, err := s.cas.IngestFile(filePath)
+	normPath := normalizeLocalFilePath(filePath)
+	if normPath == "" {
+		return nil, errors.New("file path is empty")
+	}
+	info, err := os.Stat(normPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat file %q: %w", normPath, err)
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("cannot send directory %q", normPath)
+	}
+	blob, err := s.cas.IngestFile(normPath)
 	if err != nil {
 		return nil, fmt.Errorf("ingest file: %w", err)
 	}
+	// Preserve the original local path (with real filename & extension) rather than internal CAS blob path.
+	blob.LocalPath = normPath
 	return s.publishFileBlob(ctx, blob)
 }
 
@@ -496,6 +529,13 @@ func (s *Service) SendBytes(ctx context.Context, fileName, mimeType string, data
 	blob, err := s.cas.IngestBytes(fileName, mimeType, data)
 	if err != nil {
 		return nil, fmt.Errorf("ingest bytes: %w", err)
+	}
+	if downloadDir := s.effectiveDownloadDir(); downloadDir != "" {
+		if err := os.MkdirAll(downloadDir, 0o755); err == nil {
+			if assembledPath, err := s.cas.AssembleFile(*blob, downloadDir); err == nil && assembledPath != "" {
+				blob.LocalPath = assembledPath
+			}
+		}
 	}
 	return s.publishFileBlob(ctx, blob)
 }
@@ -573,6 +613,123 @@ func (s *Service) DeleteMessage(ctx context.Context, msgID string) error {
 	})
 	s.broadcastMessages(ctx, []model.Message{msg})
 	return nil
+}
+
+// ClearAllMessages appends tombstones for all active messages and broadcasts them to peers
+// without removing any local downloaded files or CAS blobs.
+func (s *Service) ClearAllMessages(ctx context.Context) error {
+	if err := s.requireStarted(); err != nil {
+		return err
+	}
+	msgs, err := s.store.ListMessages(1_000_000, "")
+	if err != nil {
+		return fmt.Errorf("list messages: %w", err)
+	}
+	if len(msgs) == 0 {
+		return nil
+	}
+
+	alreadyDeleted := make(map[string]struct{})
+	for _, m := range msgs {
+		if m.Kind == model.MessageKindTombstone && m.TargetMsgID != "" {
+			alreadyDeleted[m.TargetMsgID] = struct{}{}
+		}
+	}
+
+	id := s.Identity()
+	cfg := s.Config()
+	now := time.Now().UnixMilli()
+	tombstones := make([]model.Message, 0, len(msgs))
+
+	for _, m := range msgs {
+		if m.Kind == model.MessageKindTombstone {
+			continue
+		}
+		if _, done := alreadyDeleted[m.MsgID]; done {
+			continue
+		}
+		seq, err := s.store.NextAuthorSeq(id.DeviceID)
+		if err != nil {
+			return err
+		}
+		tombstone := model.Message{
+			MsgID:          model.NewULID(),
+			AuthorDeviceID: id.DeviceID,
+			AuthorName:     cfg.DeviceName,
+			AuthorSeq:      seq,
+			Kind:           model.MessageKindTombstone,
+			TargetMsgID:    m.MsgID,
+			CreatedAt:      now,
+		}
+		if _, err := s.store.SaveMessage(tombstone); err != nil {
+			return err
+		}
+		msgCopy := cloneMessage(tombstone)
+		s.emit(model.AppEvent{
+			Type:    model.EventMessageDeleted,
+			Message: &msgCopy,
+		})
+		tombstones = append(tombstones, tombstone)
+	}
+
+	if len(tombstones) > 0 {
+		s.broadcastMessages(ctx, tombstones)
+	}
+	return nil
+}
+
+// ResolveLocalFile returns a guaranteed-existing, user-facing local file path for blobHash,
+// transparently materializing from CAS into DownloadDir when the original path is missing or points to internal CAS storage.
+func (s *Service) ResolveLocalFile(ctx context.Context, blobHash string) (string, error) {
+	if err := s.requireStarted(); err != nil {
+		return "", err
+	}
+	blobHash = strings.TrimSpace(blobHash)
+	if blobHash == "" {
+		return "", errors.New("blob hash is empty")
+	}
+
+	blob, err := s.store.GetFileBlob(blobHash)
+	if err != nil {
+		return "", fmt.Errorf("lookup file blob %s: %w", blobHash, err)
+	}
+	if blob == nil {
+		return "", fmt.Errorf("file blob %s not found", blobHash)
+	}
+
+	if isUsableLocalFile(blob.LocalPath, blob.BlobHash) {
+		return blob.LocalPath, nil
+	}
+
+	_, hasComplete := s.cas.HasCompleteBlob(blobHash)
+	hasChunks := false
+	if !hasComplete && blob.ChunkCount > 0 {
+		if _, readErr := s.cas.ReadChunk(blobHash, 0); readErr == nil {
+			hasChunks = true
+		}
+	}
+	if !hasComplete && !hasChunks {
+		return "", errors.New("file not available locally; please download first")
+	}
+
+	downloadDir := s.effectiveDownloadDir()
+	if err := os.MkdirAll(downloadDir, 0o755); err != nil {
+		return "", fmt.Errorf("prepare download directory %q: %w", downloadDir, err)
+	}
+
+	localPath, err := s.cas.AssembleFile(*blob, downloadDir)
+	if err != nil {
+		return "", fmt.Errorf("file not available locally; please download first (%w)", err)
+	}
+	if !isUsableLocalFile(localPath, blob.BlobHash) {
+		return "", fmt.Errorf("materialized file %q is not accessible", localPath)
+	}
+
+	blob.LocalPath = localPath
+	if err := s.store.UpsertFileBlob(*blob); err != nil {
+		return "", fmt.Errorf("persist resolved file path: %w", err)
+	}
+	return localPath, nil
 }
 
 // ListMessages returns paginated messages from the local store.
@@ -1025,7 +1182,7 @@ func (s *Service) loadOrCreateConfig(id model.LocalIdentity) (model.AppConfig, e
 			cfg.DeviceName = id.DeviceName
 			changed = true
 		}
-		if cfg.DownloadDir == "" && s.opts.DownloadDir != "" {
+		if strings.TrimSpace(cfg.DownloadDir) == "" && s.opts.DownloadDir != "" {
 			cfg.DownloadDir = s.opts.DownloadDir
 			changed = true
 		}
@@ -1171,4 +1328,121 @@ func appendUniqueString(slice []string, val string) []string {
 		}
 	}
 	return append(slice, val)
+}
+
+func (s *Service) effectiveDownloadDir() string {
+	if d := strings.TrimSpace(s.Config().DownloadDir); d != "" {
+		return d
+	}
+	if d := strings.TrimSpace(s.opts.DownloadDir); d != "" {
+		return d
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, "Downloads")
+	}
+	return "."
+}
+
+func expandAndCleanDir(raw string) (string, error) {
+	p := strings.TrimSpace(raw)
+	if p == "" {
+		return "", nil
+	}
+	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return "", fmt.Errorf("resolve home directory: %w", err)
+		}
+		if p == "~" {
+			p = home
+		} else {
+			p = filepath.Join(home, p[2:])
+		}
+	}
+	return filepath.Clean(p), nil
+}
+
+func ensureWritableDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("path is not a directory")
+	}
+	probe, err := os.CreateTemp(dir, ".tailchat-write-probe-*")
+	if err != nil {
+		return fmt.Errorf("directory is not writable: %w", err)
+	}
+	probePath := probe.Name()
+	_ = probe.Close()
+	_ = os.Remove(probePath)
+	return nil
+}
+
+func normalizeLocalFilePath(raw string) string {
+	p := strings.TrimSpace(raw)
+	if p == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(p), "file://") {
+		if u, err := url.Parse(p); err == nil && strings.EqualFold(u.Scheme, "file") {
+			decoded := u.Path
+			if u.RawPath != "" {
+				if unesc, err := url.PathUnescape(u.RawPath); err == nil {
+					decoded = unesc
+				}
+			}
+			if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
+				decoded = "//" + u.Host + decoded
+			}
+			if runtime.GOOS == "windows" && len(decoded) >= 3 && decoded[0] == '/' &&
+				((decoded[1] >= 'A' && decoded[1] <= 'Z') || (decoded[1] >= 'a' && decoded[1] <= 'z')) &&
+				decoded[2] == ':' {
+				decoded = decoded[1:]
+			}
+			p = filepath.FromSlash(decoded)
+		} else {
+			trimmed := p[len("file://"):]
+			if unesc, err := url.PathUnescape(trimmed); err == nil {
+				trimmed = unesc
+			}
+			p = filepath.FromSlash(trimmed)
+		}
+	}
+	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
+		if expanded, err := expandAndCleanDir(p); err == nil && expanded != "" {
+			p = expanded
+		}
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return filepath.Clean(p)
+}
+
+func isInternalCASBlobPath(localPath, blobHash string) bool {
+	p := strings.TrimSpace(localPath)
+	if p == "" || blobHash == "" {
+		return false
+	}
+	slashed := filepath.ToSlash(filepath.Clean(p))
+	base := path.Base(slashed)
+	if !strings.EqualFold(base, blobHash) || path.Ext(base) != "" {
+		return false
+	}
+	lower := strings.ToLower(slashed)
+	return strings.Contains(lower, "/blobs/") || strings.HasPrefix(lower, "blobs/")
+}
+
+func isUsableLocalFile(localPath, blobHash string) bool {
+	p := strings.TrimSpace(localPath)
+	if p == "" || isInternalCASBlobPath(p, blobHash) {
+		return false
+	}
+	info, err := os.Stat(p)
+	return err == nil && !info.IsDir()
 }

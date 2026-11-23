@@ -125,6 +125,8 @@ type AppAPI interface {
 	SendFile(ctx context.Context, filePath string) (*Message, error)
 	SendBytes(ctx context.Context, fileName, mimeType string, data []byte) (*Message, error)
 	DeleteMessage(ctx context.Context, msgID string) error
+	ClearAllMessages(ctx context.Context) error
+	ResolveLocalFile(ctx context.Context, blobHash string) (string, error)
 	ListMessages(limit int, beforeMsgID string) ([]Message, error)
 	SearchMessages(query string, limit int) ([]Message, error)
 

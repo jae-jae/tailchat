@@ -310,6 +310,13 @@ func (c *FileCAS) AssembleFile(blob model.FileBlob, outputDir string) (string, e
 	}
 
 	finalBlobPath := c.blobPath(blob.BlobHash)
+	if c.verifyExistingBlob(finalBlobPath, blob.BlobHash, blob.FileSize) {
+		if strings.TrimSpace(outputDir) == "" {
+			return finalBlobPath, nil
+		}
+		return c.writeFriendlyCopy(finalBlobPath, blob.FileName, blob.BlobHash, outputDir)
+	}
+
 	if err := os.MkdirAll(filepath.Dir(finalBlobPath), 0o755); err != nil {
 		return "", fmt.Errorf("create blob dir: %w", err)
 	}
@@ -391,6 +398,30 @@ func (c *FileCAS) HasCompleteBlob(blobHash string) (string, bool) {
 		return "", false
 	}
 	return p, true
+}
+
+func (c *FileCAS) verifyExistingBlob(blobPath, expectedHash string, expectedSize int64) bool {
+	f, err := os.Open(blobPath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.IsDir() {
+		return false
+	}
+	if expectedSize > 0 && info.Size() != expectedSize {
+		return false
+	}
+	h := blake3.New(32, nil)
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return false
+	}
+	if expectedSize > 0 && n != expectedSize {
+		return false
+	}
+	return strings.EqualFold(hex.EncodeToString(h.Sum(nil)), expectedHash)
 }
 
 func (c *FileCAS) writeFriendlyCopy(srcBlobPath, rawFileName, blobHash, outputDir string) (string, error) {

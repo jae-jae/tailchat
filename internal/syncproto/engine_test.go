@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"tailchat/internal/model"
+	"tailchat/internal/store"
 	"tailchat/internal/syncproto"
 )
 
@@ -1437,3 +1439,319 @@ func TestDefaultConfigMinimizeToTray(t *testing.T) {
 	}
 }
 
+type realStoreTestNode struct {
+	name  string
+	store *store.SQLiteStore
+	cas   *store.FileCAS
+	tr    *memTransport
+	svc   *syncproto.Service
+	dlDir string
+}
+
+func newRealStoreTestNode(t *testing.T, net *memNetwork, name string, autoDownloadBytes int64) *realStoreTestNode {
+	t.Helper()
+	base := t.TempDir()
+	st, err := store.Open(filepath.Join(base, "tailchat.db"))
+	if err != nil {
+		t.Fatalf("store.Open(%s): %v", name, err)
+	}
+	cas, err := store.NewCAS(filepath.Join(base, "cas"))
+	if err != nil {
+		_ = st.Close()
+		t.Fatalf("store.NewCAS(%s): %v", name, err)
+	}
+	dlDir := filepath.Join(base, "downloads")
+	if err := os.MkdirAll(dlDir, 0o755); err != nil {
+		_ = st.Close()
+		t.Fatalf("MkdirAll(%s): %v", dlDir, err)
+	}
+	tr := newMemTransport(net)
+
+	idGen := func(devName, platform string) (model.LocalIdentity, error) {
+		signPub, signPriv, err := model.GenerateEd25519Keypair()
+		if err != nil {
+			return model.LocalIdentity{}, err
+		}
+		grpPub, grpPriv, err := model.GenerateEd25519Keypair()
+		if err != nil {
+			return model.LocalIdentity{}, err
+		}
+		return model.LocalIdentity{
+			DeviceID:        "dev-" + strings.ToLower(devName) + "-" + model.NewULID(),
+			NodePrivateKey:  "priv-" + devName,
+			PresharedKey:    "psk-" + devName,
+			SignPublicKey:   signPub,
+			SignPrivateKey:  signPriv,
+			GroupID:         "grp-" + model.NewULID(),
+			GroupPublicKey:  grpPub,
+			GroupPrivateKey: grpPriv,
+			DeviceName:      devName,
+			Platform:        platform,
+			RouteEpoch:      1,
+		}, nil
+	}
+
+	svc, err := syncproto.NewService(st, cas, tr, syncproto.Options{
+		Platform:            "macos",
+		DefaultDeviceName:   name,
+		DownloadDir:         dlDir,
+		IdentityGenerator:   idGen,
+		AntiEntropyInterval: 100 * time.Millisecond,
+		DownloadWorkers:     2,
+	})
+	if err != nil {
+		_ = st.Close()
+		t.Fatalf("NewService(%s): %v", name, err)
+	}
+	if err := svc.Start(context.Background()); err != nil {
+		_ = st.Close()
+		t.Fatalf("Start(%s): %v", name, err)
+	}
+	cfg := svc.Config()
+	cfg.AutoDownloadMaxBytes = autoDownloadBytes
+	if err := svc.UpdateConfig(context.Background(), cfg); err != nil {
+		t.Fatalf("UpdateConfig(%s): %v", name, err)
+	}
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = svc.Close(ctx)
+	})
+
+	return &realStoreTestNode{
+		name:  name,
+		store: st,
+		cas:   cas,
+		tr:    tr,
+		svc:   svc,
+		dlDir: dlDir,
+	}
+}
+
+func TestSendFilePreservesRealPathAndResolveLocalFile(t *testing.T) {
+	net := newMemNetwork()
+	n := newRealStoreTestNode(t, net, "Sender", 0)
+	ctx := context.Background()
+
+	// 1. SendFile with a file:// URL-encoded path containing spaces preserves the real source path.
+	srcDir := t.TempDir()
+	srcPath := filepath.Join(srcDir, "my report 2026.txt")
+	srcContent := []byte("hello tailchat real file path test")
+	if err := os.WriteFile(srcPath, srcContent, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	fileURL := (&url.URL{Scheme: "file", Path: filepath.ToSlash(srcPath)}).String()
+	msg, err := n.svc.SendFile(ctx, "  "+fileURL+"  ")
+	if err != nil {
+		t.Fatalf("SendFile(file://): %v", err)
+	}
+	if msg.File == nil {
+		t.Fatalf("expected non-nil File metadata")
+	}
+	if msg.File.LocalPath != srcPath {
+		t.Fatalf("expected LocalPath to preserve real source path %q, got %q", srcPath, msg.File.LocalPath)
+	}
+	if strings.Contains(filepath.ToSlash(msg.File.LocalPath), "/cas/blobs/") {
+		t.Fatalf("LocalPath must not point into internal CAS blobs dir: %q", msg.File.LocalPath)
+	}
+
+	resolved, err := n.svc.ResolveLocalFile(ctx, msg.BlobHash)
+	if err != nil {
+		t.Fatalf("ResolveLocalFile(original exists): %v", err)
+	}
+	if resolved != srcPath {
+		t.Fatalf("expected ResolveLocalFile to return %q, got %q", srcPath, resolved)
+	}
+
+	// 2. Deleting the original source file still allows ResolveLocalFile to materialize from CAS into DownloadDir.
+	if err := os.Remove(srcPath); err != nil {
+		t.Fatalf("Remove source file: %v", err)
+	}
+	materialized, err := n.svc.ResolveLocalFile(ctx, msg.BlobHash)
+	if err != nil {
+		t.Fatalf("ResolveLocalFile(after delete): %v", err)
+	}
+	if filepath.Dir(materialized) != filepath.Clean(n.dlDir) {
+		t.Fatalf("expected materialized file in DownloadDir %q, got %q", n.dlDir, materialized)
+	}
+	if filepath.Base(materialized) != "my report 2026.txt" {
+		t.Fatalf("expected materialized filename 'my report 2026.txt', got %q", filepath.Base(materialized))
+	}
+	gotBytes, err := os.ReadFile(materialized)
+	if err != nil || !bytes.Equal(gotBytes, srcContent) {
+		t.Fatalf("materialized file content mismatch: err=%v len=%d", err, len(gotBytes))
+	}
+	// Verify updated LocalPath was persisted in store.
+	persistedBlob, err := n.store.GetFileBlob(msg.BlobHash)
+	if err != nil || persistedBlob == nil || persistedBlob.LocalPath != materialized {
+		t.Fatalf("expected persisted LocalPath %q, got %+v (err=%v)", materialized, persistedBlob, err)
+	}
+
+	// 3. Simulate legacy internal CAS blob LocalPath and verify ResolveLocalFile transparently repairs it.
+	casBlobPath, ok := n.cas.HasCompleteBlob(msg.BlobHash)
+	if !ok {
+		t.Fatalf("expected CAS to have complete blob %s", msg.BlobHash)
+	}
+	persistedBlob.LocalPath = casBlobPath
+	if err := n.store.UpsertFileBlob(*persistedBlob); err != nil {
+		t.Fatalf("UpsertFileBlob(legacy cas path): %v", err)
+	}
+	repairedPath, err := n.svc.ResolveLocalFile(ctx, msg.BlobHash)
+	if err != nil {
+		t.Fatalf("ResolveLocalFile(legacy cas path): %v", err)
+	}
+	if repairedPath == casBlobPath || filepath.Dir(repairedPath) != filepath.Clean(n.dlDir) {
+		t.Fatalf("expected legacy CAS path to be materialized into DownloadDir %q, got %q", n.dlDir, repairedPath)
+	}
+
+	// 4. SendBytes writes a real named file directly into DownloadDir.
+	pasteData := []byte("fake-png-clipboard-payload")
+	pasteMsg, err := n.svc.SendBytes(ctx, "clipboard-shot.png", "image/png", pasteData)
+	if err != nil {
+		t.Fatalf("SendBytes: %v", err)
+	}
+	if pasteMsg.File == nil || pasteMsg.File.LocalPath == "" {
+		t.Fatalf("expected non-empty LocalPath for SendBytes")
+	}
+	if filepath.Dir(pasteMsg.File.LocalPath) != filepath.Clean(n.dlDir) {
+		t.Fatalf("expected SendBytes file in DownloadDir %q, got %q", n.dlDir, pasteMsg.File.LocalPath)
+	}
+	if filepath.Base(pasteMsg.File.LocalPath) != "clipboard-shot.png" {
+		t.Fatalf("expected filename 'clipboard-shot.png', got %q", filepath.Base(pasteMsg.File.LocalPath))
+	}
+	pasteDisk, err := os.ReadFile(pasteMsg.File.LocalPath)
+	if err != nil || !bytes.Equal(pasteDisk, pasteData) {
+		t.Fatalf("SendBytes disk content mismatch: err=%v", err)
+	}
+
+	// 5. ResolveLocalFile for an undownloaded remote blob returns an informative error.
+	remoteHash := model.Blake3Hex([]byte("not-present-locally"))
+	if err := n.store.UpsertFileBlob(model.FileBlob{
+		BlobHash:   remoteHash,
+		FileName:   "remote.bin",
+		FileSize:   19,
+		ChunkSize:  model.DefaultChunkSize,
+		ChunkCount: 1,
+	}); err != nil {
+		t.Fatalf("UpsertFileBlob(remote): %v", err)
+	}
+	if _, err := n.svc.ResolveLocalFile(ctx, remoteHash); err == nil || !strings.Contains(err.Error(), "file not available locally") {
+		t.Fatalf("expected 'file not available locally' error, got %v", err)
+	}
+
+	// 6. UpdateConfig normalizes & creates a new DownloadDir and rejects invalid (file) paths.
+	newDLDir := filepath.Join(t.TempDir(), "custom-downloads", "nested")
+	cfg := n.svc.Config()
+	cfg.DownloadDir = "  " + newDLDir + string(filepath.Separator) + "  "
+	if err := n.svc.UpdateConfig(ctx, cfg); err != nil {
+		t.Fatalf("UpdateConfig(new DownloadDir): %v", err)
+	}
+	if got := n.svc.Config().DownloadDir; got != filepath.Clean(newDLDir) {
+		t.Fatalf("expected cleaned DownloadDir %q, got %q", filepath.Clean(newDLDir), got)
+	}
+	if st, err := os.Stat(newDLDir); err != nil || !st.IsDir() {
+		t.Fatalf("expected UpdateConfig to create DownloadDir %q (err=%v)", newDLDir, err)
+	}
+
+	notADirFile := filepath.Join(t.TempDir(), "regular-file.txt")
+	if err := os.WriteFile(notADirFile, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg.DownloadDir = notADirFile
+	if err := n.svc.UpdateConfig(ctx, cfg); err == nil {
+		t.Fatalf("expected UpdateConfig to reject regular file as DownloadDir")
+	}
+}
+
+func TestClearAllMessagesSyncsAcrossPeersAndPreservesFiles(t *testing.T) {
+	net := newMemNetwork()
+	ctx := context.Background()
+
+	a := newRealStoreTestNode(t, net, "NodeA", 10*1024*1024)
+	b := newRealStoreTestNode(t, net, "NodeB", 10*1024*1024)
+
+	code, _, err := a.svc.CreatePairingCode(ctx, 60)
+	if err != nil {
+		t.Fatalf("A.CreatePairingCode: %v", err)
+	}
+	if err := b.svc.JoinWithPairingCode(ctx, code); err != nil {
+		t.Fatalf("B.JoinWithPairingCode: %v", err)
+	}
+	waitUntil(t, 3*time.Second, "A and B connected", func() bool {
+		return isPeerConnected(a.svc, b.svc.Identity().DeviceID) &&
+			isPeerConnected(b.svc, a.svc.Identity().DeviceID)
+	})
+
+	// Send text messages from both peers and a file from A (which auto-downloads to B's DownloadDir).
+	if _, err := a.svc.SendText(ctx, "hello from A"); err != nil {
+		t.Fatalf("A.SendText: %v", err)
+	}
+	srcFile := filepath.Join(t.TempDir(), "design-doc.pdf")
+	fileBytes := []byte("pdf-payload-must-survive-clear-all")
+	if err := os.WriteFile(srcFile, fileBytes, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	fileMsg, err := a.svc.SendFile(ctx, srcFile)
+	if err != nil {
+		t.Fatalf("A.SendFile: %v", err)
+	}
+	if _, err := b.svc.SendText(ctx, "reply from B"); err != nil {
+		t.Fatalf("B.SendText: %v", err)
+	}
+
+	// Wait until both peers have all 3 active messages and B has downloaded the file locally.
+	waitUntil(t, 4*time.Second, "both peers synced all 3 messages", func() bool {
+		msgsA, _ := a.svc.ListMessages(100, "")
+		msgsB, _ := b.svc.ListMessages(100, "")
+		return len(msgsA) == 3 && len(msgsB) == 3
+	})
+	var bDownloadedPath string
+	waitUntil(t, 4*time.Second, "B downloaded file into DownloadDir", func() bool {
+		blobB, _ := b.store.GetFileBlob(fileMsg.BlobHash)
+		if blobB == nil || blobB.LocalPath == "" {
+			return false
+		}
+		if _, err := os.Stat(blobB.LocalPath); err != nil {
+			return false
+		}
+		bDownloadedPath = blobB.LocalPath
+		return true
+	})
+
+	// Clear all messages from A.
+	if err := a.svc.ClearAllMessages(ctx); err != nil {
+		t.Fatalf("A.ClearAllMessages: %v", err)
+	}
+
+	// A's active message list must be empty immediately.
+	msgsA, err := a.svc.ListMessages(100, "")
+	if err != nil {
+		t.Fatalf("A.ListMessages after clear: %v", err)
+	}
+	if len(msgsA) != 0 {
+		t.Fatalf("expected 0 active messages on A after ClearAllMessages, got %d", len(msgsA))
+	}
+
+	// Peer B must also clear all active messages via synced tombstones.
+	waitUntil(t, 4*time.Second, "B clears all messages via synced tombstones", func() bool {
+		msgsB, err := b.svc.ListMessages(100, "")
+		return err == nil && len(msgsB) == 0
+	})
+
+	// Both local files (A's original and B's downloaded copy) must remain intact on disk!
+	gotA, err := os.ReadFile(srcFile)
+	if err != nil || !bytes.Equal(gotA, fileBytes) {
+		t.Fatalf("A's local file was unexpectedly modified or removed: err=%v", err)
+	}
+	gotB, err := os.ReadFile(bDownloadedPath)
+	if err != nil || !bytes.Equal(gotB, fileBytes) {
+		t.Fatalf("B's downloaded local file %q was unexpectedly modified or removed: err=%v", bDownloadedPath, err)
+	}
+
+	// Calling ClearAllMessages on an already-empty timeline is a safe no-op.
+	if err := a.svc.ClearAllMessages(ctx); err != nil {
+		t.Fatalf("second A.ClearAllMessages: %v", err)
+	}
+}

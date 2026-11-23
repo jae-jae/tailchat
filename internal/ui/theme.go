@@ -139,36 +139,51 @@ var (
 	iconMusic = mygoui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`))
 
 	iconSparkles = mygoui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 9.27 9.27 3 12l6.27 2.73L12 21l2.73-6.27L21 12l-6.27-2.73Z"/></svg>`))
+
+	iconFolderOpen = mygoui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg>`))
+
+	iconInfo = mygoui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`))
+
+	iconGlobe = mygoui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>`))
+
+	iconGitHub = mygoui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>`))
+
+	iconAlertTriangle = mygoui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`))
 )
 
 // zenIcons lists all embedded SVG icons for unit-test validation.
 var zenIcons = map[string]*mygoui.SVG{
-	"search":       iconSearch,
-	"smartphone":   iconSmartphone,
-	"settings":     iconSettings,
-	"plus":         iconPlus,
-	"arrowUp":      iconArrowUp,
-	"clipboard":    iconClipboard,
-	"copy":         iconCopy,
-	"trash":        iconTrash,
-	"checkCircle":  iconCheckCircle,
-	"circleDashed": iconCircleDashed,
-	"x":            iconX,
-	"lock":         iconLock,
-	"server":       iconServer,
-	"laptop":       iconLaptop,
-	"download":     iconDownload,
-	"pause":        iconPause,
-	"play":         iconPlay,
-	"externalLink": iconExternalLink,
-	"qrCode":       iconQRCode,
-	"refreshCw":    iconRefreshCw,
-	"link":         iconLink,
-	"check":        iconCheck,
-	"image":        iconImage,
-	"video":        iconVideo,
-	"music":        iconMusic,
-	"sparkles":     iconSparkles,
+	"search":        iconSearch,
+	"smartphone":    iconSmartphone,
+	"settings":      iconSettings,
+	"plus":          iconPlus,
+	"arrowUp":       iconArrowUp,
+	"clipboard":     iconClipboard,
+	"copy":          iconCopy,
+	"trash":         iconTrash,
+	"checkCircle":   iconCheckCircle,
+	"circleDashed":  iconCircleDashed,
+	"x":             iconX,
+	"lock":          iconLock,
+	"server":        iconServer,
+	"laptop":        iconLaptop,
+	"download":      iconDownload,
+	"pause":         iconPause,
+	"play":          iconPlay,
+	"externalLink":  iconExternalLink,
+	"qrCode":        iconQRCode,
+	"refreshCw":     iconRefreshCw,
+	"link":          iconLink,
+	"check":         iconCheck,
+	"image":         iconImage,
+	"video":         iconVideo,
+	"music":         iconMusic,
+	"sparkles":      iconSparkles,
+	"folderOpen":    iconFolderOpen,
+	"info":          iconInfo,
+	"globe":         iconGlobe,
+	"github":        iconGitHub,
+	"alertTriangle": iconAlertTriangle,
 }
 
 // zenCircleBtn renders a 32x32 circular icon button with Zen Popover styling.
@@ -360,6 +375,81 @@ func zenDangerPillBtn(c *mygoui.Context, key, text string) mygoui.Element {
 		Children(func() {
 			mygoui.Text(c, text).FontSize(11).FontWeight(550).TextColor(fg).NoWrap()
 		})
+	return btn
+}
+
+// zenDangerSolidPillBtn renders a solid red CTA pill button for destructive confirmations.
+func zenDangerSolidPillBtn(c *mygoui.Context, key, text string) mygoui.Element {
+	btn := mygoui.ButtonBase(c.Key(key))
+
+	bg := zenDanger
+	if btn.Pressed() {
+		bg = mygoui.Hex("#B91C1C")
+	} else if btn.Hovered() {
+		bg = zenDangerDark
+	}
+
+	btn.Padding(6, 14).
+		Radius(99).
+		Background(bg).
+		Border(1, bg).
+		Justify(mygoui.Center).
+		AlignItems(mygoui.Center).
+		Cursor(mygoui.CursorPointer).
+		Label(text).
+		Children(func() {
+			mygoui.Text(c, text).FontSize(12).FontWeight(600).TextColor(zenSelfBubbleInk).NoWrap()
+		})
+	return btn
+}
+
+// zenIconPillBtn renders a secondary/primary pill button with a leading Lucide SVG icon.
+func zenIconPillBtn(c *mygoui.Context, key string, svg *mygoui.SVG, text string, primary, disabled bool) mygoui.Element {
+	btn := mygoui.ButtonBase(c.Key(key))
+
+	bg := zenSurfaceSubtle
+	border := zenBorder
+	fg := zenInk
+
+	if primary {
+		bg = zenAccent
+		border = zenAccent
+		fg = zenSelfBubbleInk
+		if !disabled {
+			if btn.Pressed() {
+				bg = zenAccentPressed
+				border = zenAccentPressed
+			} else if btn.Hovered() {
+				bg = zenAccentHover
+				border = zenAccentHover
+			}
+		}
+	} else if !disabled {
+		if btn.Pressed() {
+			bg = zenProgressTrack
+		} else if btn.Hovered() {
+			bg = zenSurfaceHover
+		}
+	}
+
+	btn.Padding(5, 11).
+		Gap(5).
+		Radius(99).
+		Background(bg).
+		Border(1, border).
+		Justify(mygoui.Center).
+		AlignItems(mygoui.Center).
+		Disabled(disabled).
+		Label(text)
+	if !disabled {
+		btn.Cursor(mygoui.CursorPointer)
+	}
+	btn.Children(func() {
+		if svg != nil {
+			mygoui.Icon(c, svg).Size(12, 12).TextColor(fg)
+		}
+		mygoui.Text(c, text).FontSize(11.5).FontWeight(550).TextColor(fg).NoWrap()
+	})
 	return btn
 }
 

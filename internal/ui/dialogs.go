@@ -10,7 +10,10 @@ import (
 	mygoui "github.com/egoist/mygo/ui"
 
 	"tailchat/internal/model"
+	"tailchat/internal/updater"
 )
+
+const tailchatGitHubURL = "https://github.com/jae-jae/tailchat"
 
 // SettingsDraft holds editable form fields for the Settings modal.
 type SettingsDraft struct {
@@ -99,7 +102,7 @@ func NewSettingsDraft(cfg model.AppConfig) SettingsDraft {
 		RateLimitKBsStr:   strconv.FormatInt(rateKBs, 10),
 		MinimizeToTray:    cfg.MinimizeToTray,
 		GlobalHotkey:      cfg.GlobalHotkey,
-		DownloadDir:       cfg.DownloadDir,
+		DownloadDir:       strings.TrimSpace(cfg.DownloadDir),
 	}
 }
 
@@ -161,7 +164,7 @@ func (d SettingsDraft) ToConfig() (model.AppConfig, error) {
 		DERP:                 derpCfg,
 		AutoDownloadMaxBytes: autoMB * 1024 * 1024,
 		MaxDownloadBytesPerS: rateKBs * 1024,
-		DownloadDir:          d.DownloadDir,
+		DownloadDir:          strings.TrimSpace(d.DownloadDir),
 		MinimizeToTray:       d.MinimizeToTray,
 		GlobalHotkey:         strings.TrimSpace(d.GlobalHotkey),
 	}, nil
@@ -709,30 +712,66 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 }
 
 func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
+	if !a.settingsOpen {
+		return
+	}
+
+	// Apply any directory path chosen asynchronously by the native folder picker.
+	a.pendingDirMu.Lock()
+	if a.pendingDownloadDir != nil {
+		a.settingsDraft.DownloadDir = *a.pendingDownloadDir
+		a.pendingDownloadDir = nil
+	}
+	a.pendingDirMu.Unlock()
+
 	t := tr(a.settingsDraft.SelectedLocale())
-	mygoui.DialogBase(c.Key("modal-settings"), &a.settingsOpen, func(backdrop, panel mygoui.Element) {
+	// While Clear Confirm dialog is open on top, keep Settings open underneath so
+	// Escape / backdrop clicks dismiss only the top confirmation dialog.
+	settingsOpenCopy := a.settingsOpen
+	openPtr := &a.settingsOpen
+	if a.clearConfirmOpen {
+		openPtr = &settingsOpenCopy
+	}
+
+	mygoui.DialogBase(c.Key("modal-settings"), openPtr, func(backdrop, panel mygoui.Element) {
 		backdrop.Background(mygoui.RGBA(15, 23, 42, 0.32))
 		panel.Width(440).
-			Padding(20).
+			Padding(18, 20).
 			Radius(18).
 			Background(zenSurface).
 			Border(1, zenBorder).
 			Shadow(0, 20, 48, 0, mygoui.RGBA(15, 23, 42, 0.22))
 
 		mygoui.Column(c).Gap(12).FillWidth().Children(func() {
-			// Modal header.
+			// Modal header: Settings title + close button.
 			mygoui.Row(c).AlignItems(mygoui.Center).FillWidth().Children(func() {
-				mygoui.Text(c, t.SettingsAndDERP).FontSize(16).Bold().TextColor(zenInk)
+				mygoui.Text(c, t.SettingsTitle).FontSize(16).Bold().TextColor(zenInk)
 				mygoui.Spacer(c)
 				if zenCircleBtn(c, "settings-x", iconX, t.CloseSettings, false).Clicked() {
 					a.settingsOpen = false
 				}
 			})
 
-			mygoui.Box(c).Height(1).FillWidth().Background(zenBorder)
+			// 2-tab segmented switcher: General · About.
+			mygoui.Segmented(c.Key("settings-tab"), &a.settingsTab,
+				t.TabGeneral,
+				t.TabAbout,
+			).Label(t.SettingsTitle).FillEqually()
 
-			// Device Name.
-			mygoui.Column(c).Gap(5).FillWidth().Children(func() {
+			if a.settingsTab == 0 {
+				a.renderSettingsGeneralTab(c, t)
+			} else {
+				a.renderSettingsAboutTab(c, snap, t)
+			}
+		})
+	})
+}
+
+func (a *App) renderSettingsGeneralTab(c *mygoui.Context, t uiStrings) {
+	mygoui.Scroll(c.Key("settings-general-scroll")).Height(460).FillWidth().Children(func() {
+		mygoui.Column(c).Gap(9).Padding(2, 6, 4, 2).FillWidth().Children(func() {
+			// 1. Device Name.
+			mygoui.Column(c).Gap(4).FillWidth().Children(func() {
 				mygoui.Text(c, t.DeviceName).FontSize(12).FontWeight(600).TextColor(zenInk)
 				mygoui.TextInput(c.Key("set-device-name"), &a.settingsDraft.DeviceName).
 					Placeholder(t.MyDevicePlace).
@@ -740,8 +779,8 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 					FillWidth()
 			})
 
-			// Language preference: Auto (fallback English), English, Chinese.
-			mygoui.Column(c).Gap(5).FillWidth().Children(func() {
+			// 2. Language preference: Auto (fallback English), English, Chinese.
+			mygoui.Column(c).Gap(4).FillWidth().Children(func() {
 				mygoui.Text(c, t.Language).FontSize(12).FontWeight(600).TextColor(zenInk)
 				mygoui.Segmented(c.Key("set-language"), &a.settingsDraft.LanguageIdx,
 					t.LanguageAuto,
@@ -750,8 +789,22 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 				).Label(t.Language).FillEqually()
 			})
 
-			// DERP Relay Server.
-			mygoui.Column(c).Gap(7).FillWidth().Children(func() {
+			// 3. File Storage Path.
+			mygoui.Column(c).Gap(4).FillWidth().Children(func() {
+				mygoui.Text(c, t.DownloadDirLabel).FontSize(12).FontWeight(600).TextColor(zenInk)
+				mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
+					mygoui.TextInput(c.Key("set-download-dir"), &a.settingsDraft.DownloadDir).
+						Placeholder(t.DownloadDirPlace).
+						Label(t.DownloadDirLabel).
+						Grow(1)
+					if zenPillBtn(c, "btn-browse-dir", t.BrowseDir, false, false).Clicked() {
+						a.triggerChooseDownloadDir()
+					}
+				})
+			})
+
+			// 4. DERP Relay Server.
+			mygoui.Column(c).Gap(6).FillWidth().Children(func() {
 				mygoui.Text(c, t.DERPServer).FontSize(12).FontWeight(600).TextColor(zenInk)
 				mygoui.Segmented(c.Key("set-derp-mode"), &a.settingsDraft.DERPModeIdx,
 					t.DERPDefault,
@@ -813,16 +866,16 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 
 			mygoui.Box(c).Height(1).FillWidth().Background(zenBorder)
 
-			// Transfers & Desktop Preferences.
+			// 5. Auto-download threshold & Download speed limit.
 			mygoui.Row(c).Gap(10).FillWidth().Children(func() {
-				mygoui.Column(c).Gap(5).Grow(1).Children(func() {
+				mygoui.Column(c).Gap(4).Grow(1).Children(func() {
 					mygoui.Text(c, t.AutoDownloadMB).FontSize(12).FontWeight(600).TextColor(zenInk)
 					mygoui.TextInput(c.Key("set-autodl-mb"), &a.settingsDraft.AutoDownloadMBStr).
 						Placeholder("20").
 						Label(t.AutoDownloadMB).
 						FillWidth()
 				})
-				mygoui.Column(c).Gap(5).Grow(1).Children(func() {
+				mygoui.Column(c).Gap(4).Grow(1).Children(func() {
 					mygoui.Text(c, t.DownloadLimitKBs).FontSize(12).FontWeight(600).TextColor(zenInk)
 					mygoui.TextInput(c.Key("set-rate-kbs"), &a.settingsDraft.RateLimitKBsStr).
 						Placeholder("0").
@@ -831,74 +884,286 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 				})
 			})
 
+			// 6. Minimize to tray.
 			mygoui.Checkbox(c.Key("set-min-tray"), &a.settingsDraft.MinimizeToTray, t.MinimizeToTray)
 
 			mygoui.Box(c).Height(1).FillWidth().Background(zenBorder)
 
-			// Software Updates section.
-			up := snap.Update
+			// 7. Danger Zone: Clear All Chat History.
 			mygoui.Row(c).
-				Padding(10, 12).
+				Padding(9, 12).
 				Gap(10).
 				Radius(12).
-				Background(zenSurfaceSubtle).
-				Border(1, zenBorder).
+				Background(zenDangerSoft).
+				Border(1, mygoui.RGBA(239, 68, 68, 0.22)).
 				AlignItems(mygoui.Center).
 				FillWidth().
 				Children(func() {
 					mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-						mygoui.Text(c, t.SoftwareUpdates).FontSize(12.5).Bold().TextColor(zenInk)
-						statusLine := fmt.Sprintf(t.CurrentVersionF, up.CurrentVersion)
-						statusColor := zenInkSecondary
-						switch {
-						case up.Checking:
-							statusLine += " · " + t.CheckingUpdates
-						case up.Available && up.LatestVersion != "":
-							statusLine = fmt.Sprintf(t.UpdateAvailableF, up.LatestVersion)
-							statusColor = zenAccent
-						case up.UpToDate:
-							statusLine += " · " + t.UpToDate
-						}
-						mygoui.Text(c, statusLine).
-							FontSize(11.5).
-							TextColor(statusColor).
-							NoWrap().
-							Ellipsis("…")
+						mygoui.Text(c, t.ClearHistoryTitle).FontSize(12).Bold().TextColor(zenDangerDark)
+						mygoui.Text(c, t.ClearHistoryNote).FontSize(11).TextColor(zenInkSecondary).Wrap()
 					})
 
-					if up.Available && up.LatestVersion != "" {
-						if zenPillBtn(c, "btn-settings-view-update", t.ViewUpdate, true, false).Clicked() {
-							a.settingsOpen = false
-							a.updateModalOpen = true
-						}
-					} else {
-						btnLabel := t.CheckForUpdates
-						if up.Checking {
-							btnLabel = t.CheckingUpdates
-						}
-						if zenPillBtn(c, "btn-check-updates", btnLabel, false, up.Checking).Clicked() {
-							a.state.CheckForUpdates(context.Background(), true)
-						}
+					if zenDangerPillBtn(c, "btn-clear-history", t.ClearAllBtn).Clicked() {
+						a.clearConfirmOpen = true
 					}
 				})
+		})
+	})
 
-			if a.settingsErr != "" {
-				mygoui.Text(c, a.settingsErr).FontSize(12).TextColor(zenDanger).Wrap()
+	if a.settingsErr != "" {
+		mygoui.Text(c, a.settingsErr).FontSize(12).TextColor(zenDanger).Wrap()
+	}
+
+	// Footer actions on Tab 0.
+	mygoui.Row(c).Gap(8).Justify(mygoui.End).FillWidth().Children(func() {
+		if zenPillBtn(c, "settings-close", t.Close, false, false).Clicked() {
+			a.settingsOpen = false
+		}
+		if zenPillBtn(c, "btn-save-settings", t.SaveSettings, true, false).Clicked() {
+			cfg, err := a.settingsDraft.ToConfig()
+			if err != nil {
+				a.settingsErr = err.Error()
+			} else if err := a.state.ApplySettings(context.Background(), cfg, false); err != nil {
+				a.settingsErr = err.Error()
+			} else {
+				a.settingsErr = ""
+				a.settingsOpen = false
 			}
+		}
+	})
+}
 
-			// Footer actions.
-			mygoui.Row(c).Gap(8).Justify(mygoui.End).FillWidth().Children(func() {
-				if zenPillBtn(c, "settings-close", t.Close, false, false).Clicked() {
-					a.settingsOpen = false
+func (a *App) renderSettingsAboutTab(c *mygoui.Context, snap ViewSnapshot, t uiStrings) {
+	up := snap.Update
+	ver := strings.TrimSpace(up.CurrentVersion)
+	if ver == "" {
+		ver = updater.FallbackVersion
+	}
+
+	mygoui.Column(c).Gap(14).FillWidth().Children(func() {
+		// Centered hero brand block: app icon, name, tagline, version pill.
+		mygoui.Column(c).
+			AlignItems(mygoui.Center).
+			Gap(7).
+			Padding(14, 8, 6, 8).
+			FillWidth().
+			Children(func() {
+				if iconSrc := a.appIcon(); iconSrc != nil {
+					mygoui.Row(c).
+						Size(68, 68).
+						Radius(16).
+						Clip().
+						Shadow(0, 8, 22, 0, mygoui.RGBA(15, 23, 42, 0.14)).
+						Children(func() {
+							mygoui.Image(c, iconSrc).Size(68, 68).Fit(mygoui.Cover)
+						})
 				}
-				if zenPillBtn(c, "btn-save-settings", t.SaveSettings, true, false).Clicked() {
-					cfg, err := a.settingsDraft.ToConfig()
-					if err != nil {
-						a.settingsErr = err.Error()
-					} else if err := a.state.ApplySettings(context.Background(), cfg, false); err != nil {
-						a.settingsErr = err.Error()
-					} else {
-						a.settingsErr = ""
+
+				mygoui.Text(c, "TailChat").FontSize(18).Bold().TextColor(zenInk)
+				mygoui.Text(c, t.AppTagline).FontSize(12).TextColor(zenInkSecondary)
+
+				mygoui.Row(c).
+					Padding(3, 10).
+					Radius(99).
+					Background(zenInputFill).
+					Border(1, zenBorder).
+					Children(func() {
+						mygoui.Text(c, "v"+ver).FontSize(11.5).FontWeight(600).TextColor(zenInkSecondary).NoWrap()
+					})
+			})
+
+		// Software Update card.
+		mygoui.Row(c).
+			Padding(12, 14).
+			Gap(10).
+			Radius(14).
+			Background(zenSurfaceSubtle).
+			Border(1, zenBorder).
+			AlignItems(mygoui.Center).
+			FillWidth().
+			Children(func() {
+				mygoui.Row(c).
+					Size(34, 34).
+					Radius(10).
+					Background(zenAccentSoft).
+					Justify(mygoui.Center).
+					AlignItems(mygoui.Center).
+					Children(func() {
+						mygoui.Icon(c, iconSparkles).Size(16, 16).TextColor(zenAccent)
+					})
+
+				mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+					mygoui.Text(c, t.SoftwareUpdates).FontSize(12.5).Bold().TextColor(zenInk)
+					statusLine := fmt.Sprintf(t.CurrentVersionF, ver)
+					statusColor := zenInkSecondary
+					switch {
+					case up.Checking:
+						statusLine = t.CheckingUpdates
+					case up.Available && up.LatestVersion != "":
+						statusLine = fmt.Sprintf(t.UpdateAvailableF, up.LatestVersion)
+						statusColor = zenAccent
+					case up.LastError != "":
+						statusLine = t.UpdateCheckFailedPref + up.LastError
+						statusColor = zenDanger
+					case up.UpToDate:
+						statusLine = t.UpToDate
+						statusColor = zenDirectText
+					}
+					mygoui.Text(c, statusLine).
+						FontSize(11.5).
+						TextColor(statusColor).
+						NoWrap().
+						Ellipsis("…")
+				})
+
+				if up.Available && up.LatestVersion != "" {
+					if zenPillBtn(c, "btn-settings-view-update", t.ViewUpdate, true, false).Clicked() {
+						a.settingsOpen = false
+						a.updateModalOpen = true
+					}
+				} else {
+					btnLabel := t.CheckForUpdates
+					if up.Checking {
+						btnLabel = t.CheckingUpdates
+					}
+					if zenPillBtn(c, "btn-check-updates", btnLabel, false, up.Checking).Clicked() {
+						a.state.CheckForUpdates(context.Background(), true)
+					}
+				}
+			})
+
+		// GitHub Repository card.
+		ghBtn := mygoui.ButtonBase(c.Key("btn-open-github"))
+		ghBg := zenSurfaceSubtle
+		if ghBtn.Pressed() {
+			ghBg = zenInputFill
+		} else if ghBtn.Hovered() {
+			ghBg = zenSurfaceHover
+		}
+		ghBtn.Padding(12, 14).
+			Gap(10).
+			Radius(14).
+			Background(ghBg).
+			Border(1, zenBorder).
+			AlignItems(mygoui.Center).
+			FillWidth().
+			Cursor(mygoui.CursorPointer).
+			Label("github.com/jae-jae/tailchat").
+			Tooltip(tailchatGitHubURL).
+			Children(func() {
+				mygoui.Row(c).
+					Size(34, 34).
+					Radius(10).
+					Background(zenSurface).
+					Border(1, zenBorder).
+					Justify(mygoui.Center).
+					AlignItems(mygoui.Center).
+					Children(func() {
+						mygoui.Icon(c, iconGitHub).Size(17, 17).TextColor(zenInk)
+					})
+
+				mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+					mygoui.Text(c, t.GitHubRepoLabel).FontSize(12.5).Bold().TextColor(zenInk)
+					mygoui.Text(c, "github.com/jae-jae/tailchat").
+						FontSize(11.5).
+						TextColor(zenInkSecondary).
+						NoWrap().
+						Ellipsis("…")
+				})
+
+				mygoui.Icon(c, iconExternalLink).Size(15, 15).TextColor(zenInkMuted)
+			})
+		if ghBtn.Clicked() {
+			if a.openExternalURL != nil {
+				if err := a.openExternalURL(tailchatGitHubURL); err != nil {
+					a.state.SetToast(t.OpenURLFailPref+err.Error(), true)
+				}
+			}
+		}
+
+		// Footer on Tab 1.
+		mygoui.Row(c).Gap(8).Justify(mygoui.End).FillWidth().Children(func() {
+			if zenPillBtn(c, "settings-about-close", t.Close, false, false).Clicked() {
+				a.settingsOpen = false
+			}
+		})
+	})
+}
+
+func (a *App) triggerChooseDownloadDir() {
+	if a.chooseDirDialog == nil {
+		return
+	}
+	defaultDir := a.settingsDraft.DownloadDir
+	go func() {
+		chosen, err := a.chooseDirDialog(defaultDir)
+		if err != nil {
+			a.state.SetToast(tr(a.state.Locale()).ChooseDirFailPref+err.Error(), true)
+			return
+		}
+		chosen = strings.TrimSpace(chosen)
+		if chosen == "" {
+			return
+		}
+		a.pendingDirMu.Lock()
+		a.pendingDownloadDir = &chosen
+		a.pendingDirMu.Unlock()
+		if a.win != nil {
+			a.win.Invalidate()
+		} else {
+			a.state.notifyInvalidate()
+		}
+	}()
+}
+
+func (a *App) renderClearConfirmModal(c *mygoui.Context, snap ViewSnapshot) {
+	if !a.clearConfirmOpen {
+		return
+	}
+	t := tr(a.settingsDraft.SelectedLocale())
+	if !a.settingsOpen {
+		t = tr(snap.Locale)
+	}
+
+	mygoui.DialogBase(c.Key("modal-clear-confirm"), &a.clearConfirmOpen, func(backdrop, panel mygoui.Element) {
+		backdrop.Background(mygoui.RGBA(15, 23, 42, 0.48))
+		panel.Width(380).
+			MaxWidthPercent(90).
+			Padding(20).
+			Radius(18).
+			Background(zenSurface).
+			Border(1, mygoui.RGBA(239, 68, 68, 0.28)).
+			Shadow(0, 24, 56, 0, mygoui.RGBA(15, 23, 42, 0.28))
+
+		mygoui.Column(c).Gap(14).FillWidth().Children(func() {
+			mygoui.Row(c).Gap(11).AlignItems(mygoui.Center).FillWidth().Children(func() {
+				mygoui.Row(c).
+					Size(36, 36).
+					Radius(11).
+					Background(zenDangerSoft).
+					Justify(mygoui.Center).
+					AlignItems(mygoui.Center).
+					Children(func() {
+						mygoui.Icon(c, iconAlertTriangle).Size(18, 18).TextColor(zenDanger)
+					})
+				mygoui.Text(c, t.ClearConfirmTitle).FontSize(15).Bold().TextColor(zenInk).Grow(1).Wrap()
+			})
+
+			mygoui.Text(c, t.ClearConfirmBody).
+				FontSize(12.5).
+				TextColor(zenInkSecondary).
+				Wrap().
+				FillWidth()
+
+			mygoui.Row(c).Gap(8).Justify(mygoui.End).FillWidth().Children(func() {
+				if zenPillBtn(c, "clear-confirm-cancel", t.Cancel, false, false).Clicked() {
+					a.clearConfirmOpen = false
+				}
+				if zenDangerSolidPillBtn(c, "clear-confirm-ok", t.ClearConfirmOK).Clicked() {
+					err := a.state.ClearAllMessages(context.Background())
+					a.clearConfirmOpen = false
+					if err == nil {
 						a.settingsOpen = false
 					}
 				}

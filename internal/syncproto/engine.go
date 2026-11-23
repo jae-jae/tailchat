@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -714,15 +715,21 @@ func (s *Service) broadcastMessages(ctx context.Context, msgs []model.Message) {
 	if len(msgs) == 0 {
 		return
 	}
-	prepared := make([]model.Message, 0, len(msgs))
-	for _, m := range msgs {
-		prepared = append(prepared, s.prepareMessageForWire(m))
+	for i := 0; i < len(msgs); i += msgBatchLimit {
+		end := i + msgBatchLimit
+		if end > len(msgs) {
+			end = len(msgs)
+		}
+		prepared := make([]model.Message, 0, end-i)
+		for _, m := range msgs[i:end] {
+			prepared = append(prepared, s.prepareMessageForWire(m))
+		}
+		frame := ControlFrame{
+			Type:     FrameMsgBatch,
+			MsgBatch: &MsgBatchPayload{Messages: prepared},
+		}
+		s.broadcastControlFrame(ctx, frame, "")
 	}
-	frame := ControlFrame{
-		Type:     FrameMsgBatch,
-		MsgBatch: &MsgBatchPayload{Messages: prepared},
-	}
-	s.broadcastControlFrame(ctx, frame, "")
 }
 
 func (s *Service) broadcastBlobHave(ctx context.Context, blobHash string) {
@@ -782,13 +789,15 @@ func (s *Service) ingestRemoteMessages(msgs []model.Message, fromPeerID string) 
 			blob.LocalPath = "" // Never trust remote filesystem paths.
 
 			if existing, err := s.store.GetFileBlob(blob.BlobHash); err == nil && existing != nil {
-				blob.LocalPath = existing.LocalPath
+				if isUsableLocalFile(existing.LocalPath, blob.BlobHash) {
+					blob.LocalPath = existing.LocalPath
+				}
 				for _, seeder := range existing.Seeders {
 					blob.Seeders = appendUniqueString(blob.Seeders, seeder)
 				}
 			}
 			if blob.LocalPath == "" {
-				if p, ok := s.cas.HasCompleteBlob(blob.BlobHash); ok {
+				if p, ok := s.cas.HasCompleteBlob(blob.BlobHash); ok && isUsableLocalFile(p, blob.BlobHash) {
 					blob.LocalPath = p
 				}
 			}
@@ -882,12 +891,20 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 		return fmt.Errorf("blob %s not found", blobHash)
 	}
 
-	// Fast path if already complete locally.
-	if blob.LocalPath != "" {
+	// Fast path if already complete locally with a usable user-facing path.
+	if isUsableLocalFile(blob.LocalPath, blob.BlobHash) {
 		return s.markBlobComplete(ctx, blob, blob.LocalPath)
 	}
 	if localPath, ok := s.cas.HasCompleteBlob(blobHash); ok {
-		return s.markBlobComplete(ctx, blob, localPath)
+		if isUsableLocalFile(localPath, blob.BlobHash) {
+			return s.markBlobComplete(ctx, blob, localPath)
+		}
+		downloadDir := s.effectiveDownloadDir()
+		if err := os.MkdirAll(downloadDir, 0o755); err == nil {
+			if assembledPath, err := s.cas.AssembleFile(*blob, downloadDir); err == nil && isUsableLocalFile(assembledPath, blob.BlobHash) {
+				return s.markBlobComplete(ctx, blob, assembledPath)
+			}
+		}
 	}
 
 	// Register single active transfer controller per blobHash.
@@ -1098,10 +1115,8 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 	}
 
 	// All chunks verified on disk; assemble into DownloadDir.
-	downloadDir := s.Config().DownloadDir
-	if downloadDir == "" {
-		downloadDir = s.opts.DownloadDir
-	}
+	downloadDir := s.effectiveDownloadDir()
+	_ = os.MkdirAll(downloadDir, 0o755)
 	localPath, err := s.cas.AssembleFile(*blob, downloadDir)
 	if err != nil {
 		task.State = model.TransferFailed

@@ -48,6 +48,7 @@ func (a *App) renderUpdateBanner(c *mygoui.Context, snap ViewSnapshot) {
 					a.devicesPopoverOpen = false
 					a.pairOpen = false
 					a.settingsOpen = false
+					a.clearConfirmOpen = false
 					a.lightboxOpen = false
 					a.updateModalOpen = true
 				}
@@ -123,8 +124,8 @@ func (a *App) renderImageBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 	}
 
 	cardW := boxW
-	if cardW < 216 {
-		cardW = 216
+	if cardW < 236 {
+		cardW = 236
 	}
 
 	mygoui.Column(c).
@@ -135,7 +136,7 @@ func (a *App) renderImageBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 		Shadow(0, 3, 12, 0, mygoui.RGBA(15, 23, 42, 0.07)).
 		Clip().
 		Children(func() {
-			// Clickable media canvas.
+			// Clickable media canvas (opens Lightbox modal).
 			previewBtn := mygoui.ButtonBase(c.Key("img-preview-" + msg.MsgID)).
 				FillWidth().
 				Height(boxH).
@@ -176,9 +177,9 @@ func (a *App) renderImageBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 				a.openLightbox(msg)
 			}
 
-			// Compact caption footer with filename, file size, and quick Open action.
+			// Compact caption footer: clickable filename opens directly, micro button reveals in folder.
 			mygoui.Row(c).
-				Padding(7, 10).
+				Padding(6, 10).
 				Gap(8).
 				AlignItems(mygoui.Center).
 				FillWidth().
@@ -186,23 +187,42 @@ func (a *App) renderImageBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 				BorderWidth(1, 0, 0, 0).
 				BorderColor(zenBorder).
 				Children(func() {
-					mygoui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
-						mygoui.Text(c, fb.FileName).
-							FontSize(11.5).
-							FontWeight(600).
-							TextColor(zenInk).
-							NoWrap().
-							Ellipsis("…")
-						mygoui.Text(c, FormatBytes(fb.FileSize)).
-							FontSize(10.5).
-							TextColor(zenInkMuted).
-							NoWrap()
-					})
+					nameBtn := mygoui.ButtonBase(c.Key("open-img-direct-" + msg.MsgID))
+					nameBg := mygoui.RGBA(0, 0, 0, 0)
+					if nameBtn.Pressed() {
+						nameBg = zenInputFill
+					} else if nameBtn.Hovered() {
+						nameBg = zenSurfaceSubtle
+					}
+					nameBtn.Grow(1).
+						MinWidth(0).
+						Padding(2, 4).
+						Radius(6).
+						Background(nameBg).
+						Justify(mygoui.Start).
+						Cursor(mygoui.CursorPointer).
+						Label(t.OpenFileDirectly).
+						Tooltip(t.OpenFileDirectly).
+						Children(func() {
+							mygoui.Column(c).Grow(1).MinWidth(0).Gap(1).Children(func() {
+								mygoui.Text(c, fb.FileName).
+									FontSize(11.5).
+									FontWeight(600).
+									TextColor(zenInk).
+									NoWrap().
+									Ellipsis("…")
+								mygoui.Text(c, FormatBytes(fb.FileSize)).
+									FontSize(10.5).
+									TextColor(zenInkMuted).
+									NoWrap()
+							})
+						})
+					if nameBtn.Clicked() {
+						a.openFileDirectly(fb)
+					}
 
-					if zenMicroBtn(c, "open-img-"+msg.MsgID, iconExternalLink, t.OpenFile, false).Clicked() {
-						if err := a.openLocalPath(fb.LocalPath); err != nil {
-							a.state.SetToast(t.OpenFileFailedPref+err.Error(), true)
-						}
+					if zenMicroBtn(c, "reveal-img-"+msg.MsgID, iconFolderOpen, t.ShowInFolder, false).Clicked() {
+						a.revealFileInManager(fb)
 					}
 				})
 		})
@@ -293,12 +313,10 @@ func (a *App) renderVideoBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 				})
 
 			if playArea.Clicked() {
-				if err := a.openLocalPath(fb.LocalPath); err != nil {
-					a.state.SetToast(t.OpenFileFailedPref+err.Error(), true)
-				}
+				a.openFileDirectly(fb)
 			}
 
-			// Caption footer.
+			// Caption footer with Show in Folder button.
 			mygoui.Row(c).
 				Padding(8, 11).
 				Gap(8).
@@ -321,10 +339,8 @@ func (a *App) renderVideoBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 							NoWrap()
 					})
 
-					if zenPillBtn(c, "open-vid-"+msg.MsgID, t.OpenFile, false, false).Clicked() {
-						if err := a.openLocalPath(fb.LocalPath); err != nil {
-							a.state.SetToast(t.OpenFileFailedPref+err.Error(), true)
-						}
+					if zenIconPillBtn(c, "reveal-vid-"+msg.MsgID, iconFolderOpen, t.ShowInFolder, false, false).Clicked() {
+						a.revealFileInManager(fb)
 					}
 				})
 		})
@@ -359,7 +375,7 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 	}
 
 	mygoui.Column(c).
-		Width(320).
+		Width(332).
 		Padding(11, 13).
 		Gap(9).
 		Radius(16).
@@ -399,12 +415,32 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 				}
 
 				mygoui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
-					mygoui.Text(c, fb.FileName).
-						FontSize(12.5).
-						FontWeight(600).
-						TextColor(zenInk).
-						NoWrap().
-						Ellipsis("…")
+					titleBtn := mygoui.ButtonBase(c.Key("open-aud-direct-" + msg.MsgID))
+					titleBg := mygoui.RGBA(0, 0, 0, 0)
+					if titleBtn.Pressed() {
+						titleBg = zenInputFill
+					} else if titleBtn.Hovered() {
+						titleBg = zenSurfaceSubtle
+					}
+					titleBtn.Padding(1, 3).
+						Radius(5).
+						Background(titleBg).
+						Justify(mygoui.Start).
+						FillWidth().
+						Cursor(mygoui.CursorPointer).
+						Label(t.OpenFileDirectly).
+						Tooltip(t.OpenFileDirectly).
+						Children(func() {
+							mygoui.Text(c, fb.FileName).
+								FontSize(12.5).
+								FontWeight(600).
+								TextColor(zenInk).
+								NoWrap().
+								Ellipsis("…")
+						})
+					if titleBtn.Clicked() {
+						a.openFileDirectly(fb)
+					}
 
 					// Sleek audio playback track.
 					mygoui.Row(c).
@@ -428,10 +464,8 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 						Ellipsis("…")
 				})
 
-				if zenMicroBtn(c, "open-aud-"+msg.MsgID, iconExternalLink, t.OpenFile, false).Clicked() {
-					if err := a.openLocalPath(fb.LocalPath); err != nil {
-						a.state.SetToast(t.OpenFileFailedPref+err.Error(), true)
-					}
+				if zenMicroBtn(c, "reveal-aud-"+msg.MsgID, iconFolderOpen, t.ShowInFolder, false).Clicked() {
+					a.revealFileInManager(fb)
 				}
 			})
 		})
@@ -531,6 +565,7 @@ func (a *App) openLightbox(msg model.Message) {
 	a.devicesPopoverOpen = false
 	a.pairOpen = false
 	a.settingsOpen = false
+	a.clearConfirmOpen = false
 	a.updateModalOpen = false
 	a.lightboxMsgID = msg.MsgID
 	a.lightboxFile = *msg.File
@@ -598,8 +633,8 @@ func (a *App) renderLightboxModal(c *mygoui.Context, snap ViewSnapshot) {
 			Gap(12).
 			FillWidth().
 			Children(func() {
-				// Top header bar: filename + dimensions + Open & Close buttons.
-				mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
+				// Top header bar: filename + dimensions + Open, Show in Folder & Close buttons.
+				mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).FillWidth().Children(func() {
 					mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
 						mygoui.Text(c, fb.FileName).
 							FontSize(13.5).
@@ -618,9 +653,11 @@ func (a *App) renderLightboxModal(c *mygoui.Context, snap ViewSnapshot) {
 					})
 
 					if zenPillBtn(c, "lb-open-file", t.OpenFile, false, false).Clicked() {
-						if err := a.openLocalPath(fb.LocalPath); err != nil {
-							a.state.SetToast(t.OpenFileFailedPref+err.Error(), true)
-						}
+						a.openFileDirectly(&fb)
+					}
+
+					if zenIconPillBtn(c, "lb-reveal-file", iconFolderOpen, t.ShowInFolder, false, false).Clicked() {
+						a.revealFileInManager(&fb)
 					}
 
 					closeBtn := mygoui.ButtonBase(c.Key("lb-close")).

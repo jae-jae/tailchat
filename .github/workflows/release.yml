@@ -2,43 +2,225 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
-  verify:
-    name: Verify Tag & Tests
+  prepare:
+    name: Prepare Release & Tests
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.meta.outputs.version }}
+      should_release: ${{ steps.version.outputs.should_release }}
+      prev_tag: ${{ steps.version.outputs.prev_tag }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
-      - name: Verify tag matches mygo.json version
-        id: meta
+      - name: Compute next version & generate release notes
+        id: version
+        shell: bash
         run: |
-          VERSION="$(jq -r .version mygo.json)"
-          if [ "$GITHUB_REF_NAME" != "v${VERSION}" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} does not match mygo.json version v${VERSION}"
-            exit 1
+          set -euo pipefail
+
+          PREV_TAG="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/ && !found { print; found=1 }')"
+
+          if [ -n "$PREV_TAG" ] && [ "$(git rev-parse HEAD)" = "$(git rev-parse "${PREV_TAG}^{commit}")" ]; then
+            echo "HEAD is already tagged as ${PREV_TAG}; skipping release."
+            {
+              echo "should_release=false"
+              echo "prev_tag=${PREV_TAG}"
+              echo "version="
+              echo "tag="
+            } >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          if [ -n "$PREV_TAG" ]; then
+            BASE_VERSION="${PREV_TAG#v}"
+            RANGE="${PREV_TAG}..HEAD"
+          else
+            BASE_VERSION="0.0.0"
+            RANGE="HEAD"
+          fi
+
+          if [ "$(git rev-list --count "$RANGE")" -eq 0 ]; then
+            echo "No new commits since ${PREV_TAG}; skipping release."
+            {
+              echo "should_release=false"
+              echo "prev_tag=${PREV_TAG}"
+              echo "version="
+              echo "tag="
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+
+          SUBJECTS="$(git log --format='%s' "$RANGE")"
+          BODIES="$(git log --format='%B' "$RANGE")"
+
+          BUMP="patch"
+          if grep -Eq '^[a-zA-Z]+(\([^)]+\))?!:' <<< "$SUBJECTS" \
+            || grep -Eq 'BREAKING[ -]CHANGE:' <<< "$BODIES"; then
+            BUMP="major"
+          elif grep -Eq '^feat(\([^)]+\))?:' <<< "$SUBJECTS"; then
+            BUMP="minor"
+          fi
+
+          case "$BUMP" in
+            major) NEXT_VERSION="$((MAJOR + 1)).0.0" ;;
+            minor) NEXT_VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
+            patch) NEXT_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+          esac
+          NEXT_TAG="v${NEXT_VERSION}"
+
+          echo "Previous tag: ${PREV_TAG:-<none>}"
+          echo "Bump level:   ${BUMP}"
+          echo "Next version: ${NEXT_VERSION} (${NEXT_TAG})"
+
+          FEATURES=()
+          FIXES=()
+          PERF_REFACTOR=()
+          CHORES=()
+
+          re_conv='^([a-zA-Z]+)(\(([^)]+)\))?(!)?:[[:space:]]*(.*)$'
+          while IFS=$'\x1f' read -r sha subject; do
+            [ -z "$sha" ] && continue
+            if [[ "$subject" =~ $re_conv ]]; then
+              ctype="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')"
+              scope="${BASH_REMATCH[3]}"
+              bang="${BASH_REMATCH[4]}"
+              desc="${BASH_REMATCH[5]}"
+
+              prefix=""
+              if [ -n "$bang" ]; then
+                prefix="**BREAKING**: "
+              fi
+
+              case "$ctype" in
+                feat)
+                  if [ -n "$scope" ]; then
+                    FEATURES+=("- ${prefix}**${scope}**: ${desc} (${sha})")
+                  else
+                    FEATURES+=("- ${prefix}${desc} (${sha})")
+                  fi
+                  ;;
+                fix)
+                  if [ -n "$scope" ]; then
+                    FIXES+=("- ${prefix}**${scope}**: ${desc} (${sha})")
+                  else
+                    FIXES+=("- ${prefix}${desc} (${sha})")
+                  fi
+                  ;;
+                perf|refactor)
+                  if [ -n "$scope" ]; then
+                    PERF_REFACTOR+=("- ${prefix}**${ctype}(${scope})**: ${desc} (${sha})")
+                  else
+                    PERF_REFACTOR+=("- ${prefix}**${ctype}**: ${desc} (${sha})")
+                  fi
+                  ;;
+                *)
+                  if [ -n "$scope" ]; then
+                    CHORES+=("- ${prefix}**${ctype}(${scope})**: ${desc} (${sha})")
+                  else
+                    CHORES+=("- ${prefix}**${ctype}**: ${desc} (${sha})")
+                  fi
+                  ;;
+              esac
+            else
+              CHORES+=("- ${subject} (${sha})")
+            fi
+          done < <(git log --no-merges --format='%h%x1f%s' "$RANGE")
+
+          {
+            has_section=false
+
+            if [ "${#FEATURES[@]}" -gt 0 ]; then
+              echo "### ✨ Features"
+              echo ""
+              printf '%s\n' "${FEATURES[@]}"
+              echo ""
+              has_section=true
+            fi
+
+            if [ "${#FIXES[@]}" -gt 0 ]; then
+              echo "### 🐛 Bug Fixes"
+              echo ""
+              printf '%s\n' "${FIXES[@]}"
+              echo ""
+              has_section=true
+            fi
+
+            if [ "${#PERF_REFACTOR[@]}" -gt 0 ]; then
+              echo "### ⚡ Performance & Refactor"
+              echo ""
+              printf '%s\n' "${PERF_REFACTOR[@]}"
+              echo ""
+              has_section=true
+            fi
+
+            if [ "${#CHORES[@]}" -gt 0 ]; then
+              echo "### 🔧 Chores, CI & Docs"
+              echo ""
+              printf '%s\n' "${CHORES[@]}"
+              echo ""
+              has_section=true
+            fi
+
+            if [ "$has_section" = false ]; then
+              echo "Maintenance release."
+              echo ""
+            fi
+
+            if [ -n "$PREV_TAG" ]; then
+              echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${NEXT_TAG}"
+            fi
+          } > release-notes.md
+
+          echo "--- Generated release-notes.md ---"
+          cat release-notes.md
+          echo "----------------------------------"
+
+          {
+            echo "should_release=true"
+            echo "prev_tag=${PREV_TAG}"
+            echo "version=${NEXT_VERSION}"
+            echo "tag=${NEXT_TAG}"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-go@v7
+        if: steps.version.outputs.should_release == 'true'
         with:
           go-version-file: go.mod
 
       - name: Vet & Test
+        if: steps.version.outputs.should_release == 'true'
         run: |
           go vet ./...
           go test -count=1 ./...
 
+      - uses: actions/upload-artifact@v7
+        if: steps.version.outputs.should_release == 'true'
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
   build-desktop:
     name: Desktop (${{ matrix.name }})
-    needs: verify
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -59,6 +241,15 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+
+      - name: Inject release version into mygo.json
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        shell: bash
+        run: |
+          jq --arg v "$VERSION" '.version = $v' mygo.json > mygo.json.tmp
+          mv mygo.json.tmp mygo.json
+          echo "Injected version $(jq -r .version mygo.json) into mygo.json"
 
       - name: Install NSIS for Windows installers
         if: matrix.name == 'Windows' && runner.os == 'Linux'
@@ -107,7 +298,8 @@ jobs:
 
   build-headless:
     name: Headless Nodes
-    needs: verify
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -118,7 +310,7 @@ jobs:
 
       - name: Cross-compile tailchat-headless
         env:
-          VERSION: ${{ needs.verify.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           mkdir -p release-assets stage
           for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64; do
@@ -129,9 +321,9 @@ jobs:
               EXT=".exe"
             fi
             BIN="tailchat-headless${EXT}"
-            echo "Building ${BIN} for ${GOOS}/${GOARCH}..."
+            echo "Building ${BIN} for ${GOOS}/${GOARCH} (v${VERSION})..."
             CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
-              go build -trimpath -ldflags="-s -w" -o "stage/${BIN}" ./cmd/tailchat-headless
+              go build -trimpath -ldflags="-s -w -X tailchat/internal/updater.FallbackVersion=${VERSION}" -o "stage/${BIN}" ./cmd/tailchat-headless
             ARCHIVE_BASE="tailchat-headless-${VERSION}-${GOOS}-${GOARCH}"
             if [ "$GOOS" = "windows" ]; then
               (cd stage && zip -q "../release-assets/${ARCHIVE_BASE}.zip" "${BIN}")
@@ -150,13 +342,25 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    needs: [verify, build-desktop, build-headless]
+    needs: [prepare, build-desktop, build-headless]
+    if: needs.prepare.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
         with:
+          pattern: desktop-*
           path: all-assets
           merge-multiple: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: headless
+          path: all-assets
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+          path: release-notes
 
       - name: Generate SHA256SUMS.txt
         run: |
@@ -164,23 +368,27 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Create or update GitHub Release
+      - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          PRERELEASE_FLAG=""
-          if [[ "$TAG" == *-* ]]; then
-            PRERELEASE_FLAG="--prerelease"
+          set -euo pipefail
+          if [ ! -f release-notes/release-notes.md ]; then
+            echo "::error::Missing release-notes/release-notes.md"
+            exit 1
           fi
 
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" all-assets/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "TailChat ${TAG}" \
+              --notes-file release-notes/release-notes.md
           else
             gh release create "$TAG" all-assets/* \
               --repo "$GITHUB_REPOSITORY" \
-              --verify-tag \
+              --target "$GITHUB_SHA" \
               --title "TailChat ${TAG}" \
-              --generate-notes \
-              $PRERELEASE_FLAG
+              --notes-file release-notes/release-notes.md
           fi

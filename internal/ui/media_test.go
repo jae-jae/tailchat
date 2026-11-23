@@ -303,8 +303,8 @@ func TestInlineMediaPreviewLightboxAndUpdateUI(t *testing.T) {
 	}
 	tt.Frame()
 
-	if !tt.HasText("480×300") {
-		t.Fatalf("expected lightbox header to show natural dimensions 480×300; texts: %v", tt.Texts())
+	if !tt.HasText("480×300") || !tt.HasText("打开文件") || !tt.HasText("打开所在目录") {
+		t.Fatalf("expected lightbox header to show dimensions 480×300, 打开文件, and 打开所在目录; texts: %v", tt.Texts())
 	}
 	imgLB := mygoui.Render(app.View, 540, 740, 2)
 	assertValid2xRender(t, imgLB, outDir, "06_image_lightbox.png")
@@ -347,14 +347,18 @@ func TestInlineMediaPreviewLightboxAndUpdateUI(t *testing.T) {
 		t.Fatalf("expected update banner hidden after dismiss")
 	}
 
-	// Open Settings and verify Software Updates section exists.
+	// Open Settings, switch to About tab, and verify Software Updates card exists.
 	if err := tt.Click("设置与 DERP"); err != nil {
 		t.Fatalf("open settings: %v", err)
 	}
 	tt.Frame()
+	if err := tt.Click("关于"); err != nil {
+		t.Fatalf("switch to 关于 tab: %v", err)
+	}
+	tt.Frame()
 	for _, want := range []string{"软件更新", "发现新版本：v1.1.0", "查看更新"} {
 		if !tt.HasText(want) {
-			t.Fatalf("expected Settings modal to contain %q; texts: %v", want, tt.Texts())
+			t.Fatalf("expected Settings About tab to contain %q; texts: %v", want, tt.Texts())
 		}
 	}
 	imgSet := mygoui.Render(app.View, 540, 740, 2)

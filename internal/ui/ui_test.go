@@ -31,13 +31,16 @@ type mockAppAPI struct {
 	nextMsgNo   int
 	nextPairSeq int
 
-	joinedCodes    []string
-	revokedIDs     []string
-	updatedDERPs   []model.DERPConfig
-	downloadedHash []string
-	sentFiles      []string
-	lastSearch     string
-	cancelPairCnt  int
+	joinedCodes     []string
+	revokedIDs      []string
+	updatedDERPs    []model.DERPConfig
+	downloadedHash  []string
+	sentFiles       []string
+	lastSearch      string
+	cancelPairCnt   int
+	clearedAllCount int
+	resolvedHashes  []string
+	resolvePaths    map[string]string
 }
 
 func newMockAppAPI() *mockAppAPI {
@@ -252,6 +255,41 @@ func (m *mockAppAPI) DeleteMessage(_ context.Context, msgID string) error {
 	return nil
 }
 
+func (m *mockAppAPI) ClearAllMessages(_ context.Context) error {
+	m.mu.Lock()
+	m.clearedAllCount++
+	removed := make([]string, 0, len(m.messages))
+	for _, msg := range m.messages {
+		removed = append(removed, msg.MsgID)
+	}
+	m.messages = nil
+	m.mu.Unlock()
+	for _, id := range removed {
+		m.emit(model.AppEvent{
+			Type:    model.EventMessageDeleted,
+			Message: &model.Message{TargetMsgID: id},
+		})
+	}
+	return nil
+}
+
+func (m *mockAppAPI) ResolveLocalFile(_ context.Context, blobHash string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resolvedHashes = append(m.resolvedHashes, blobHash)
+	if m.resolvePaths != nil {
+		if p, ok := m.resolvePaths[blobHash]; ok && p != "" {
+			return p, nil
+		}
+	}
+	for _, msg := range m.messages {
+		if msg.File != nil && msg.File.BlobHash == blobHash && msg.File.LocalPath != "" {
+			return msg.File.LocalPath, nil
+		}
+	}
+	return "", fmt.Errorf("local file not found for blob %s", blobHash)
+}
+
 func (m *mockAppAPI) ListMessages(limit int, _ string) ([]model.Message, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -439,17 +477,20 @@ func newTestApp(t *testing.T) (*mockAppAPI, *State, *App, *mygoui.Tester) {
 	app.writeClipboardText = func(string, bool) error { return nil }
 	app.readClipboardText = func() string { return "" }
 	app.openLocalPath = func(string) error { return nil }
+	app.showInFolder = func(string) error { return nil }
 	app.openFileDialog = func() ([]string, error) { return nil, nil }
+	app.chooseDirDialog = func(string) (string, error) { return "", nil }
+	app.openExternalURL = func(string) error { return nil }
 
 	tt := mygoui.NewTester(app.View, 540, 740)
 	return mock, state, app, tt
 }
 
 func TestAllIconsSupported(t *testing.T) {
-	if len(zenIcons) < 22 {
-		t.Fatalf("expected at least 22 embedded SVG icons, got %d", len(zenIcons))
+	if len(zenIcons) < 27 {
+		t.Fatalf("expected at least 27 embedded SVG icons, got %d", len(zenIcons))
 	}
-	for _, required := range []string{"qrCode", "refreshCw", "link", "check"} {
+	for _, required := range []string{"qrCode", "refreshCw", "link", "check", "folderOpen", "info", "globe", "github", "alertTriangle"} {
 		if zenIcons[required] == nil {
 			t.Fatalf("missing required icon %q in zenIcons", required)
 		}
@@ -844,6 +885,29 @@ func TestRenderZenSnapshot2x(t *testing.T) {
 	_, _, appDev, _ := newTestApp(t)
 	appDev.devicesPopoverOpen = true
 	assertValid2xRender(t, mygoui.Render(appDev.View, 540, 740, 2), outDir, "04_devices_popover.png")
+
+	// 9. Redesigned Settings modal: General tab (Tab 0).
+	_, stGen, appSetGen, _ := newTestApp(t)
+	appSetGen.settingsDraft = NewSettingsDraft(stGen.Config())
+	appSetGen.settingsDraft.DownloadDir = "/Users/demo/Downloads/TailChat"
+	appSetGen.settingsTab = 0
+	appSetGen.settingsOpen = true
+	assertValid2xRender(t, mygoui.Render(appSetGen.View, 540, 740, 2), outDir, "09_settings_general_tab.png")
+
+	// 10. Redesigned Settings modal: About tab (Tab 1).
+	_, stAbout, appSetAbout, _ := newTestApp(t)
+	appSetAbout.settingsDraft = NewSettingsDraft(stAbout.Config())
+	appSetAbout.settingsTab = 1
+	appSetAbout.settingsOpen = true
+	assertValid2xRender(t, mygoui.Render(appSetAbout.View, 540, 740, 2), outDir, "10_settings_about_tab.png")
+
+	// 11. Clear All Chat History confirmation modal.
+	_, stClr, appClr, _ := newTestApp(t)
+	appClr.settingsDraft = NewSettingsDraft(stClr.Config())
+	appClr.settingsTab = 0
+	appClr.settingsOpen = true
+	appClr.clearConfirmOpen = true
+	assertValid2xRender(t, mygoui.Render(appClr.View, 540, 740, 2), outDir, "11_clear_confirm_modal.png")
 }
 
 func TestLocaleResolutionAndFallback(t *testing.T) {
@@ -921,7 +985,7 @@ func TestLanguageSwitchingInSettingsUI(t *testing.T) {
 	}
 	tt.Frame()
 	// Live preview inside Settings modal switches immediately to English.
-	if !tt.HasText("Settings & DERP") || !tt.HasText("Save") {
+	if !tt.HasText("Settings") || !tt.HasText("General") || !tt.HasText("About") || !tt.HasText("Save") {
 		t.Fatalf("expected live English preview in Settings modal; texts: %v", tt.Texts())
 	}
 
@@ -997,5 +1061,258 @@ func TestEmbeddedIconsValidPNG(t *testing.T) {
 		}
 	}
 }
+
+func TestFileOpenDirectlyVsShowInFolder(t *testing.T) {
+	mock, st, app, tt := newTestApp(t)
+
+	const (
+		blobHash     = "blake3-local-doc-001"
+		initialPath  = "/tmp/stale-report.pdf"
+		resolvedPath = "/tmp/resolved-report.pdf"
+	)
+
+	now := time.Now().UnixMilli()
+	mock.mu.Lock()
+	mock.resolvePaths = map[string]string{blobHash: resolvedPath}
+	mock.messages = []model.Message{
+		{
+			MsgID:          "msg-local-pdf",
+			AuthorDeviceID: "dev-self-001",
+			AuthorName:     "MacBook Pro",
+			AuthorSeq:      1,
+			Kind:           model.MessageKindFile,
+			BlobHash:       blobHash,
+			CreatedAt:      now,
+			File: &model.FileBlob{
+				BlobHash:  blobHash,
+				FileName:  "quarterly-report.pdf",
+				FileSize:  512 * 1024,
+				MimeType:  "application/pdf",
+				LocalPath: initialPath,
+				Seeders:   []string{"dev-self-001"},
+			},
+		},
+	}
+	mock.mu.Unlock()
+	st.RefreshAll()
+	tt.Frame()
+
+	var openedPaths []string
+	var revealedPaths []string
+	app.openLocalPath = func(p string) error {
+		openedPaths = append(openedPaths, p)
+		return nil
+	}
+	app.showInFolder = func(p string) error {
+		revealedPaths = append(revealedPaths, p)
+		return nil
+	}
+
+	if !tt.HasText("quarterly-report.pdf") || !tt.HasText("打开所在目录") {
+		t.Fatalf("expected local file card with 打开所在目录; texts: %v", tt.Texts())
+	}
+
+	// 1. Clicking the file header opens it directly using the resolved local path.
+	if err := tt.Click("quarterly-report.pdf"); err != nil {
+		t.Fatalf("click file header to open directly: %v", err)
+	}
+	tt.Frame()
+
+	if len(openedPaths) != 1 || openedPaths[0] != resolvedPath {
+		t.Fatalf("expected openLocalPath(%q), got %v", resolvedPath, openedPaths)
+	}
+	if len(revealedPaths) != 0 {
+		t.Fatalf("expected showInFolder not called on direct open, got %v", revealedPaths)
+	}
+	// Verify State cached message updated its LocalPath to the resolved path.
+	snap := st.Snapshot()
+	if len(snap.Messages) != 1 || snap.Messages[0].File == nil || snap.Messages[0].File.LocalPath != resolvedPath {
+		t.Fatalf("expected State to update cached LocalPath to %q, got %+v", resolvedPath, snap.Messages)
+	}
+
+	// 2. Clicking "打开所在目录" invokes showInFolder and NOT openLocalPath.
+	if err := tt.Click("打开所在目录"); err != nil {
+		t.Fatalf("click 打开所在目录: %v", err)
+	}
+	tt.Frame()
+
+	if len(revealedPaths) != 1 || revealedPaths[0] != resolvedPath {
+		t.Fatalf("expected showInFolder(%q), got %v", resolvedPath, revealedPaths)
+	}
+	if len(openedPaths) != 1 {
+		t.Fatalf("expected openLocalPath NOT called when clicking 打开所在目录, got %v", openedPaths)
+	}
+
+	mock.mu.Lock()
+	hashes := append([]string(nil), mock.resolvedHashes...)
+	mock.mu.Unlock()
+	if len(hashes) < 2 || hashes[0] != blobHash || hashes[1] != blobHash {
+		t.Fatalf("expected ResolveLocalFile called for %q, got %v", blobHash, hashes)
+	}
+}
+
+func TestSettingsDownloadDirAndBrowsePicker(t *testing.T) {
+	mock, _, app, tt := newTestApp(t)
+
+	chosenCh := make(chan struct{})
+	app.chooseDirDialog = func(defaultDir string) (string, error) {
+		defer close(chosenCh)
+		return "/Users/tester/TailChatFiles", nil
+	}
+
+	if err := tt.Click("设置与 DERP"); err != nil {
+		t.Fatalf("open settings: %v", err)
+	}
+	tt.Frame()
+
+	if !tt.HasText("文件存储路径") || !tt.HasText("选择目录") {
+		t.Fatalf("expected File Storage Path controls in Settings General tab; texts: %v", tt.Texts())
+	}
+
+	if err := tt.Click("选择目录"); err != nil {
+		t.Fatalf("click 选择目录: %v", err)
+	}
+
+	select {
+	case <-chosenCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for chooseDirDialog goroutine")
+	}
+
+	// Wait briefly until pendingDownloadDir is published, then render a frame to apply it.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		tt.Frame()
+		if app.settingsDraft.DownloadDir == "/Users/tester/TailChatFiles" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if app.settingsDraft.DownloadDir != "/Users/tester/TailChatFiles" {
+		t.Fatalf("expected settingsDraft.DownloadDir updated from picker, got %q", app.settingsDraft.DownloadDir)
+	}
+
+	if err := tt.Click("保存设置"); err != nil {
+		t.Fatalf("click 保存设置: %v", err)
+	}
+	tt.Frame()
+
+	if got := mock.Config().DownloadDir; got != "/Users/tester/TailChatFiles" {
+		t.Fatalf("expected persisted DownloadDir %q, got %q", "/Users/tester/TailChatFiles", got)
+	}
+}
+
+func TestClearAllHistoryConfirmationFlow(t *testing.T) {
+	mock, st, app, tt := newTestApp(t)
+
+	if len(st.Snapshot().Messages) == 0 {
+		t.Fatalf("expected initial seeded messages")
+	}
+
+	if err := tt.Click("设置与 DERP"); err != nil {
+		t.Fatalf("open settings: %v", err)
+	}
+	tt.Frame()
+
+	if !tt.HasText("清空所有聊天记录") || !tt.HasText("一键清空") {
+		t.Fatalf("expected Danger Zone clear history controls; texts: %v", tt.Texts())
+	}
+
+	// 1. Click "一键清空" -> opens confirmation modal.
+	if err := tt.Click("一键清空"); err != nil {
+		t.Fatalf("click 一键清空: %v", err)
+	}
+	tt.Frame()
+	if !app.clearConfirmOpen || !tt.HasText("确认清空所有聊天记录？") {
+		t.Fatalf("expected clear confirm modal open; open=%v texts=%v", app.clearConfirmOpen, tt.Texts())
+	}
+
+	// 2. Click "取消" -> closes confirmation modal, preserves messages.
+	if err := tt.Click("取消"); err != nil {
+		t.Fatalf("click 取消: %v", err)
+	}
+	tt.Frame()
+	if app.clearConfirmOpen {
+		t.Fatalf("expected clear confirm modal closed after cancel")
+	}
+	if !app.settingsOpen {
+		t.Fatalf("expected settings modal to remain open after cancelling clear confirm")
+	}
+	mock.mu.Lock()
+	cnt := mock.clearedAllCount
+	mock.mu.Unlock()
+	if cnt != 0 || len(st.Snapshot().Messages) == 0 {
+		t.Fatalf("expected messages preserved on cancel; clearedAllCount=%d msgs=%d", cnt, len(st.Snapshot().Messages))
+	}
+
+	// 3. Click "一键清空" -> click "确认清空" -> clears all messages & closes both modals.
+	if err := tt.Click("一键清空"); err != nil {
+		t.Fatalf("click 一键清空 second time: %v", err)
+	}
+	tt.Frame()
+	if err := tt.Click("确认清空"); err != nil {
+		t.Fatalf("click 确认清空: %v", err)
+	}
+	tt.Frame()
+
+	mock.mu.Lock()
+	cnt = mock.clearedAllCount
+	mock.mu.Unlock()
+	if cnt != 1 {
+		t.Fatalf("expected ClearAllMessages called once, got %d", cnt)
+	}
+	if app.clearConfirmOpen || app.settingsOpen {
+		t.Fatalf("expected both confirm and settings modals closed; confirm=%v settings=%v", app.clearConfirmOpen, app.settingsOpen)
+	}
+	if len(st.Snapshot().Messages) != 0 {
+		t.Fatalf("expected empty timeline after clear all, got %d messages", len(st.Snapshot().Messages))
+	}
+	if !tt.HasText("已清空所有聊天记录") || !tt.HasText("随时跨设备同步文字与文件") {
+		t.Fatalf("expected cleared toast and empty timeline state; texts: %v", tt.Texts())
+	}
+}
+
+func TestSettingsAboutTabVersionUpdatesAndGitHub(t *testing.T) {
+	_, _, app, tt := newTestApp(t)
+
+	var openedURLs []string
+	app.openExternalURL = func(url string) error {
+		openedURLs = append(openedURLs, url)
+		return nil
+	}
+
+	if err := tt.Click("设置与 DERP"); err != nil {
+		t.Fatalf("open settings: %v", err)
+	}
+	tt.Frame()
+
+	if !tt.HasText("通用") || !tt.HasText("关于") {
+		t.Fatalf("expected General & About tabs in Settings; texts: %v", tt.Texts())
+	}
+
+	if err := tt.Click("关于"); err != nil {
+		t.Fatalf("switch to 关于 tab: %v", err)
+	}
+	tt.Frame()
+
+	if app.settingsTab != 1 {
+		t.Fatalf("expected settingsTab == 1, got %d", app.settingsTab)
+	}
+	for _, want := range []string{"TailChat", "v1.0.0", "软件更新", "检查更新", "GitHub", "github.com/jae-jae/tailchat"} {
+		if !tt.HasText(want) {
+			t.Fatalf("expected About tab to contain %q; texts: %v", want, tt.Texts())
+		}
+	}
+
+	if err := tt.Click("github.com/jae-jae/tailchat"); err != nil {
+		t.Fatalf("click GitHub repo link: %v", err)
+	}
+	tt.Frame()
+
+	if len(openedURLs) != 1 || openedURLs[0] != "https://github.com/jae-jae/tailchat" {
+		t.Fatalf("expected openExternalURL called with GitHub repo URL, got %v", openedURLs)
+	}
+}
+
 
 
