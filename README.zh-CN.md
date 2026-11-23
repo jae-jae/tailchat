@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/icon.png" alt="TailChat" width="112" />
+
 # TailChat
 
 **零账号、纯 Go 原生界面的跨平台多设备 P2P 文件与文字传输助手**

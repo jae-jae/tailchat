@@ -1,13 +1,8 @@
 package ui
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"image"
-	"image/color"
-	"image/draw"
-	"image/png"
 	"log"
 	"runtime"
 	"sync"
@@ -107,6 +102,11 @@ func Run(api model.AppAPI, onReady func()) error {
 	})
 
 	mygo.App.WhenReady(func() {
+		if runtime.GOOS == "darwin" && len(dockIconPNG) > 0 {
+			if err := mygo.App.Dock.SetIcon(dockIconPNG); err != nil {
+				log.Printf("tailchat: dock icon warning: %v", err)
+			}
+		}
 		state.Start(rootCtx)
 
 		w := mygo.NewWindow(mygo.WindowOptions{
@@ -246,7 +246,7 @@ func buildTrayMenu(loc Locale, onToggle func(), onQuickPair func()) *mygo.Menu {
 func setupSystemTray(loc Locale, onToggle func(), onQuickPair func()) *mygo.Tray {
 	opts := mygo.TrayOptions{
 		ID:             "tailchat-tray",
-		Icon:           renderTrayIconPNG(),
+		Icon:           trayIconPNG(),
 		IconIsTemplate: runtime.GOOS == "darwin",
 		ToolTip:        tr(loc).TrayTooltip,
 		Menu:           buildTrayMenu(loc, onToggle, onQuickPair),
@@ -259,28 +259,13 @@ func setupSystemTray(loc Locale, onToggle func(), onQuickPair func()) *mygo.Tray
 	return t
 }
 
-// renderTrayIconPNG generates a crisp 32x32 PNG chat-bubble template icon in memory.
-func renderTrayIconPNG() []byte {
-	img := image.NewNRGBA(image.Rect(0, 0, 32, 32))
-	ink := color.NRGBA{R: 56, G: 130, B: 246, A: 255}
+// trayIconPNG returns the embedded 32x32 Retina (@2x for 16pt) TailChat
+// Option A chat-bubble tray icon. macOS uses the monochrome template asset
+// so AppKit adapts automatically to light/dark menu bars; Windows and Linux
+// use the full-color cobalt-blue variant.
+func trayIconPNG() []byte {
 	if runtime.GOOS == "darwin" {
-		ink = color.NRGBA{R: 0, G: 0, B: 0, A: 255}
+		return trayIconTemplatePNG
 	}
-	uniform := image.NewUniform(ink)
-	// Outer chat bubble border + tail.
-	rects := []image.Rectangle{
-		image.Rect(4, 5, 28, 8),
-		image.Rect(4, 21, 28, 24),
-		image.Rect(4, 8, 7, 21),
-		image.Rect(25, 8, 28, 21),
-		image.Rect(8, 24, 13, 28),
-		image.Rect(10, 12, 22, 14),
-		image.Rect(10, 16, 18, 18),
-	}
-	for _, r := range rects {
-		draw.Draw(img, r, uniform, image.Point{}, draw.Src)
-	}
-	var buf bytes.Buffer
-	_ = png.Encode(&buf, img)
-	return buf.Bytes()
+	return trayIconColorPNG
 }

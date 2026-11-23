@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"image"
@@ -973,4 +974,28 @@ func TestLanguageSwitchingInSettingsUI(t *testing.T) {
 		t.Fatalf("expected Auto with English fallback to render English UI; texts: %v", tt.Texts())
 	}
 }
+
+func TestEmbeddedIconsValidPNG(t *testing.T) {
+	cases := []struct {
+		name string
+		data []byte
+		w, h int
+	}{
+		{"dock_icon", dockIconPNG, 512, 512},
+		{"tray_icon_template", trayIconTemplatePNG, 32, 32},
+		{"tray_icon_color", trayIconColorPNG, 32, 32},
+		{"tray_icon_active", trayIconPNG(), 32, 32},
+	}
+	for _, tc := range cases {
+		img, err := png.Decode(bytes.NewReader(tc.data))
+		if err != nil {
+			t.Fatalf("%s: png.Decode failed: %v", tc.name, err)
+		}
+		b := img.Bounds()
+		if b.Dx() != tc.w || b.Dy() != tc.h {
+			t.Fatalf("%s: expected %dx%d, got %dx%d", tc.name, tc.w, tc.h, b.Dx(), b.Dy())
+		}
+	}
+}
+
 

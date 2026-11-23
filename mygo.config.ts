@@ -5,11 +5,13 @@ export default defineConfig({
   slug: "tailchat",
   identifier: "dev.tailchat.app",
   version: "0.1.0",
+  icon: "resources/icon.png",
   main: "./cmd/tailchat",
   out: "dist",
   urlSchemes: ["tailchat"],
 
   macos: {
+    icon: "resources/macos/AppIcon.icns",
     minimumSystemVersion: "13.0",
   },
 

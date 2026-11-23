@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/icon.png" alt="TailChat" width="112" />
+
 # TailChat
 
 **Account-free, pure-Go native P2P file & text transfer across all your devices**
