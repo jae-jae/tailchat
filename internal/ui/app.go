@@ -67,7 +67,7 @@ func NewApp(state *State) *App {
 	a.openFileDialog = func() ([]string, error) {
 		return mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent:   a.win,
-			Title:    "选择要发送的文件",
+			Title:    tr(a.state.Locale()).SelectFilesTitle,
 			Multiple: true,
 		})
 	}
@@ -160,7 +160,7 @@ func (a *App) generatePairingCode(showToast bool) {
 	a.pairCopiedUntil = time.Time{}
 	_ = a.pairingQRBitmap()
 	if showToast {
-		a.state.SetToast("已刷新配对二维码", false)
+		a.state.SetToast(tr(a.state.Locale()).RefreshedQRToast, false)
 	}
 }
 
@@ -236,11 +236,11 @@ func (a *App) View(c *mygoui.Context) {
 		devicesBtn = a.renderHeader(c, snap)
 
 		if a.searchOpen || a.searchInput != "" {
-			a.renderSearchDrawer(c)
+			a.renderSearchDrawer(c, snap.Locale)
 		}
 
 		if dragOver {
-			a.renderDropOverlayHint(c)
+			a.renderDropOverlayHint(c, snap.Locale)
 		}
 
 		if snap.ToastText != "" {
@@ -248,7 +248,7 @@ func (a *App) View(c *mygoui.Context) {
 		}
 
 		a.renderTimeline(c, snap)
-		a.renderComposer(c, dragOver)
+		a.renderComposer(c, snap.Locale, dragOver)
 	})
 
 	a.renderDevicesPopover(c, devicesBtn, snap)
@@ -261,6 +261,7 @@ func (a *App) anyOverlayOpen() bool {
 }
 
 func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element {
+	t := tr(snap.Locale)
 	bar := c.TitleBar()
 	leftPad := max(bar.Left+10, 18)
 	rightPad := max(bar.Right+10, 14)
@@ -307,7 +308,7 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 			// Right action bar: Search, Devices, Settings, and dedicated Pair CTA pill.
 			mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
 				searchActive := a.searchOpen || a.searchInput != ""
-				if zenCircleBtn(c, "btn-search", iconSearch, "搜索消息", searchActive).Clicked() {
+				if zenCircleBtn(c, "btn-search", iconSearch, t.SearchMessages, searchActive).Clicked() {
 					a.searchOpen = !a.searchOpen
 					if a.searchOpen {
 						a.focusSearchPending = true
@@ -317,7 +318,7 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 					}
 				}
 
-				devicesBtn = zenCircleBtn(c, "btn-devices", iconSmartphone, "已配对设备", a.devicesPopoverOpen)
+				devicesBtn = zenCircleBtn(c, "btn-devices", iconSmartphone, t.PairedDevices, a.devicesPopoverOpen)
 				if devicesBtn.Clicked() {
 					a.devicesPopoverOpen = !a.devicesPopoverOpen
 					if a.devicesPopoverOpen {
@@ -327,7 +328,7 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 					}
 				}
 
-				if zenCircleBtn(c, "btn-settings", iconSettings, "设置与 DERP", a.settingsOpen).Clicked() {
+				if zenCircleBtn(c, "btn-settings", iconSettings, t.SettingsAndDERP, a.settingsOpen).Clicked() {
 					a.settingsDraft = NewSettingsDraft(snap.Config)
 					a.settingsErr = ""
 					a.devicesPopoverOpen = false
@@ -335,7 +336,7 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 					a.settingsOpen = true
 				}
 
-				if zenPairHeaderBtn(c, a.pairOpen).Clicked() {
+				if zenPairHeaderBtn(c, t.Pair, t.PairNewDevice, a.pairOpen).Clicked() {
 					a.openPairingFlow(0)
 				}
 			})
@@ -344,7 +345,8 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 	return devicesBtn
 }
 
-func (a *App) renderSearchDrawer(c *mygoui.Context) {
+func (a *App) renderSearchDrawer(c *mygoui.Context, loc Locale) {
+	t := tr(loc)
 	mygoui.Row(c).
 		Padding(8, 16).
 		Background(zenSurface).
@@ -363,8 +365,8 @@ func (a *App) renderSearchDrawer(c *mygoui.Context) {
 				Children(func() {
 					mygoui.Icon(c, iconSearch).Size(14, 14).TextColor(zenInkMuted)
 					in := mygoui.TextInputBase(c.Key("search"), &a.searchInput).
-						Placeholder("搜索文字或文件名…").
-						Label("搜索消息").
+						Placeholder(t.SearchPlaceholder).
+						Label(t.SearchMessages).
 						Bind(&a.searchRef).
 						Grow(1).
 						FontSize(12.5).
@@ -384,7 +386,7 @@ func (a *App) renderSearchDrawer(c *mygoui.Context) {
 							Justify(mygoui.Center).
 							AlignItems(mygoui.Center).
 							Cursor(mygoui.CursorPointer).
-							Label("清除搜索").
+							Label(t.ClearSearch).
 							Children(func() {
 								mygoui.Icon(c, iconX).Size(11, 11).TextColor(zenInkSecondary)
 							})
@@ -398,7 +400,7 @@ func (a *App) renderSearchDrawer(c *mygoui.Context) {
 		})
 }
 
-func (a *App) renderDropOverlayHint(c *mygoui.Context) {
+func (a *App) renderDropOverlayHint(c *mygoui.Context, loc Locale) {
 	mygoui.Row(c).
 		Padding(8, 16).
 		Background(zenAccentSoft).
@@ -406,11 +408,12 @@ func (a *App) renderDropOverlayHint(c *mygoui.Context) {
 		BorderColor(zenAccentBorder).
 		Justify(mygoui.Center).
 		Children(func() {
-			mygoui.Text(c, "松开鼠标，将文件广播给所有已配对设备").FontSize(12).Bold().TextColor(zenAccent)
+			mygoui.Text(c, tr(loc).DropOverlayHint).FontSize(12).Bold().TextColor(zenAccent)
 		})
 }
 
 func (a *App) renderToastPill(c *mygoui.Context, snap ViewSnapshot) {
+	t := tr(snap.Locale)
 	bg := zenInk
 	if snap.ToastIsErr {
 		bg = zenDangerDark
@@ -436,7 +439,7 @@ func (a *App) renderToastPill(c *mygoui.Context, snap ViewSnapshot) {
 						Justify(mygoui.Center).
 						AlignItems(mygoui.Center).
 						Cursor(mygoui.CursorPointer).
-						Label("关闭提示").
+						Label(t.DismissToast).
 						Children(func() {
 							mygoui.Icon(c, iconX).Size(11, 11).TextColor(zenSelfBubbleInk)
 						})
@@ -463,7 +466,7 @@ func (a *App) renderTimeline(c *mygoui.Context, snap ViewSnapshot) {
 			}
 
 			if visibleCount == 0 {
-				a.renderEmptyState(c, snap.SearchQuery)
+				a.renderEmptyState(c, snap.Locale, snap.SearchQuery)
 				return
 			}
 
@@ -473,7 +476,7 @@ func (a *App) renderTimeline(c *mygoui.Context, snap ViewSnapshot) {
 					continue
 				}
 				if msg.CreatedAt > 0 && (prevTS == 0 || msg.CreatedAt-prevTS > timeChipGapMs) {
-					if chip := FormatTimeChip(msg.CreatedAt); chip != "" {
+					if chip := FormatTimeChipLocale(snap.Locale, msg.CreatedAt); chip != "" {
 						mygoui.Row(c).
 							AlignSelf(mygoui.Center).
 							Padding(3, 10).
@@ -493,13 +496,14 @@ func (a *App) renderTimeline(c *mygoui.Context, snap ViewSnapshot) {
 	})
 }
 
-func (a *App) renderEmptyState(c *mygoui.Context, searchQuery string) {
-	title := "随时跨设备同步文字与文件"
-	subtitle := "在下方输入文字、直接拖入任意文件到此窗口，或点击右上角「配对」按钮快速配对。"
+func (a *App) renderEmptyState(c *mygoui.Context, loc Locale, searchQuery string) {
+	t := tr(loc)
+	title := t.EmptyTitle
+	subtitle := t.EmptySubtitle
 	icon := iconLaptop
 	if searchQuery != "" {
-		title = fmt.Sprintf("未找到包含 %q 的消息", searchQuery)
-		subtitle = "试试更换关键词或文件名重新搜索。"
+		title = fmt.Sprintf(t.SearchEmptyTitleF, searchQuery)
+		subtitle = t.SearchEmptySub
 		icon = iconSearch
 	}
 
@@ -530,6 +534,7 @@ func (a *App) renderEmptyState(c *mygoui.Context, searchQuery string) {
 }
 
 func (a *App) renderMessageBubble(c *mygoui.Context, snap ViewSnapshot, msg model.Message) {
+	t := tr(snap.Locale)
 	isSelf := snap.Identity.DeviceID != "" && msg.AuthorDeviceID == snap.Identity.DeviceID
 	ts := FormatTimestamp(msg.CreatedAt)
 
@@ -546,7 +551,7 @@ func (a *App) renderMessageBubble(c *mygoui.Context, snap ViewSnapshot, msg mode
 		// Sender label row.
 		mygoui.Row(c).Padding(0, 4).Gap(5).AlignItems(mygoui.Center).Children(func() {
 			if isSelf {
-				label := "本机"
+				label := t.ThisDevice
 				if ts != "" {
 					label += " · " + ts
 				}
@@ -605,15 +610,15 @@ func (a *App) renderMessageBubble(c *mygoui.Context, snap ViewSnapshot, msg mode
 		// Subtle micro-action row under each bubble.
 		mygoui.Row(c).Gap(4).Padding(0, 2).AlignItems(mygoui.Center).Children(func() {
 			if msg.Kind == model.MessageKindText {
-				copyLabel := "复制"
+				copyLabel := t.Copy
 				if a.concealedCopy {
-					copyLabel = "隐私复制"
+					copyLabel = t.PrivateCopy
 				}
 				if zenMicroBtn(c, "copy-"+msg.MsgID, iconCopy, copyLabel, false).Clicked() {
 					a.copyText(msg.TextBody, a.concealedCopy)
 				}
 			}
-			if zenMicroBtn(c, "del-"+msg.MsgID, iconTrash, "删除", true).Clicked() {
+			if zenMicroBtn(c, "del-"+msg.MsgID, iconTrash, t.Delete, true).Clicked() {
 				msgID := msg.MsgID
 				_ = a.state.DeleteMessage(context.Background(), msgID)
 			}
@@ -622,6 +627,7 @@ func (a *App) renderMessageBubble(c *mygoui.Context, snap ViewSnapshot, msg mode
 }
 
 func (a *App) renderFileBubble(c *mygoui.Context, snap ViewSnapshot, msg model.Message) {
+	t := tr(snap.Locale)
 	fb := msg.File
 	if fb == nil {
 		mygoui.Column(c).
@@ -630,7 +636,7 @@ func (a *App) renderFileBubble(c *mygoui.Context, snap ViewSnapshot, msg model.M
 			Background(zenSurface).
 			Border(1, zenBorder).
 			Children(func() {
-				mygoui.Text(c, "文件 "+shortID(msg.BlobHash)).FontSize(13).TextColor(zenInkMuted)
+				mygoui.Text(c, t.FilePrefix+shortID(msg.BlobHash)).FontSize(13).TextColor(zenInkMuted)
 			})
 		return
 	}
@@ -650,29 +656,24 @@ func (a *App) renderFileBubble(c *mygoui.Context, snap ViewSnapshot, msg model.M
 		pct := int(task.Progress() * 100)
 		meta = fmt.Sprintf("%s / %s · %d%%", FormatBytes(task.BytesDone), FormatBytes(task.BytesTotal), pct)
 	case hasTask && task.State == model.TransferPaused:
-		meta = fmt.Sprintf("%s / %s · 已暂停", FormatBytes(task.BytesDone), FormatBytes(task.BytesTotal))
+		meta = fmt.Sprintf(t.TransferPausedF, FormatBytes(task.BytesDone), FormatBytes(task.BytesTotal))
 	case hasTask && task.State == model.TransferFailed:
-		meta = fmt.Sprintf("%s · 传输失败", FormatBytes(fb.FileSize))
+		meta = fmt.Sprintf(t.TransferFailedF, FormatBytes(fb.FileSize))
 		if task.LastError != "" {
 			meta += " · " + task.LastError
 		}
 	default:
-		seederCount := len(fb.Seeders)
-		if seederCount > 0 {
-			meta = fmt.Sprintf("%s · %d 台设备有源", FormatBytes(fb.FileSize), seederCount)
-		} else {
-			meta = FormatBytes(fb.FileSize)
-		}
+		meta = formatSeedersMeta(snap.Locale, FormatBytes(fb.FileSize), len(fb.Seeders))
 	}
 
-	footText := "点击按需下载"
+	footText := t.ClickToDownload
 	switch {
 	case isLocal:
-		footText = "BLAKE3 校验通过"
+		footText = t.Blake3Verified
 	case hasTask && (task.State == model.TransferRunning || task.State == model.TransferQueued || task.State == model.TransferPaused):
-		footText = "支持断点续传"
+		footText = t.ResumableTransfer
 	case hasTask && task.State == model.TransferFailed:
-		footText = "传输中断 · 可重新下载"
+		footText = t.TransferRetryHint
 	}
 
 	mygoui.Column(c).
@@ -736,7 +737,7 @@ func (a *App) renderFileBubble(c *mygoui.Context, snap ViewSnapshot, msg model.M
 					Radius(99).
 					Background(zenProgressTrack).
 					Clip().
-					Label("传输进度").
+					Label(t.TransferProgress).
 					Children(func() {
 						mygoui.Box(c).
 							Height(6).
@@ -759,27 +760,27 @@ func (a *App) renderFileBubble(c *mygoui.Context, snap ViewSnapshot, msg model.M
 					blobHash := fb.BlobHash
 					switch {
 					case isLocal && fb.LocalPath != "":
-						if zenPillBtn(c, "open-"+msg.MsgID, "打开文件", false, false).Clicked() {
+						if zenPillBtn(c, "open-"+msg.MsgID, t.OpenFile, false, false).Clicked() {
 							if err := a.openLocalPath(fb.LocalPath); err != nil {
-								a.state.SetToast("无法打开文件："+err.Error(), true)
+								a.state.SetToast(t.OpenFileFailedPref+err.Error(), true)
 							}
 						}
 					case hasTask && (task.State == model.TransferRunning || task.State == model.TransferQueued):
-						if zenPillBtn(c, "pause-"+msg.MsgID, "暂停", false, false).Clicked() {
+						if zenPillBtn(c, "pause-"+msg.MsgID, t.Pause, false, false).Clicked() {
 							_ = a.state.PauseTransfer(blobHash)
 						}
-						if zenPillBtn(c, "cancel-"+msg.MsgID, "取消", false, false).Clicked() {
+						if zenPillBtn(c, "cancel-"+msg.MsgID, t.Cancel, false, false).Clicked() {
 							_ = a.state.CancelTransfer(blobHash)
 						}
 					case hasTask && task.State == model.TransferPaused:
-						if zenPillBtn(c, "resume-"+msg.MsgID, "继续", true, false).Clicked() {
+						if zenPillBtn(c, "resume-"+msg.MsgID, t.Resume, true, false).Clicked() {
 							_ = a.state.DownloadFile(context.Background(), blobHash)
 						}
-						if zenPillBtn(c, "cancel-"+msg.MsgID, "取消", false, false).Clicked() {
+						if zenPillBtn(c, "cancel-"+msg.MsgID, t.Cancel, false, false).Clicked() {
 							_ = a.state.CancelTransfer(blobHash)
 						}
 					default:
-						if zenPillBtn(c, "dl-"+msg.MsgID, "立即下载", true, false).Clicked() {
+						if zenPillBtn(c, "dl-"+msg.MsgID, t.DownloadNow, true, false).Clicked() {
 							_ = a.state.DownloadFile(context.Background(), blobHash)
 						}
 					}
@@ -788,7 +789,8 @@ func (a *App) renderFileBubble(c *mygoui.Context, snap ViewSnapshot, msg model.M
 		})
 }
 
-func (a *App) renderComposer(c *mygoui.Context, dragOver bool) {
+func (a *App) renderComposer(c *mygoui.Context, loc Locale, dragOver bool) {
+	t := tr(loc)
 	mygoui.Column(c).
 		Padding(10, 14, 14, 14).
 		Gap(8).
@@ -800,12 +802,12 @@ func (a *App) renderComposer(c *mygoui.Context, dragOver bool) {
 			hintBg := zenDropHintBg
 			hintBorder := zenBorderStrong
 			hintFg := zenInkMuted
-			hintText := "拖入任意文件到此窗口，或点击粘贴截图广播给所有设备"
+			hintText := t.DropStripIdle
 			if dragOver {
 				hintBg = zenAccentSoft
 				hintBorder = zenAccent
 				hintFg = zenAccent
-				hintText = "松开鼠标立即广播文件给所有设备"
+				hintText = t.DropStripActive
 			}
 			mygoui.Row(c).
 				Padding(5, 10).
@@ -820,18 +822,18 @@ func (a *App) renderComposer(c *mygoui.Context, dragOver bool) {
 
 			// Input row.
 			mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Children(func() {
-				if zenCircleBtn(c, "btn-attach", iconPlus, "选择文件", false).Clicked() {
+				if zenCircleBtn(c, "btn-attach", iconPlus, t.AttachFiles, false).Clicked() {
 					a.triggerAttachFile()
 				}
-				if zenCircleBtn(c, "btn-paste", iconClipboard, "粘贴剪贴板", false).Clicked() {
+				if zenCircleBtn(c, "btn-paste", iconClipboard, t.PasteClipboard, false).Clicked() {
 					a.triggerPasteClipboard()
 				}
-				if zenCircleBtn(c, "btn-concealed", iconLock, "隐私复制", a.concealedCopy).Clicked() {
+				if zenCircleBtn(c, "btn-concealed", iconLock, t.PrivateCopy, a.concealedCopy).Clicked() {
 					a.concealedCopy = !a.concealedCopy
 					if a.concealedCopy {
-						a.state.SetToast("已开启隐私复制（不写入剪贴板历史）", false)
+						a.state.SetToast(t.PrivateCopyOn, false)
 					} else {
-						a.state.SetToast("已关闭隐私复制", false)
+						a.state.SetToast(t.PrivateCopyOff, false)
 					}
 				}
 
@@ -845,8 +847,8 @@ func (a *App) renderComposer(c *mygoui.Context, dragOver bool) {
 					AlignItems(mygoui.Center).
 					Children(func() {
 						in = mygoui.TextInputBase(c.Key("composer"), &a.composer).
-							Placeholder("发一段文字给其他设备…").
-							Label("输入消息").
+							Placeholder(t.ComposerPlace).
+							Label(t.ComposerLabel).
 							Bind(&a.composerRef).
 							FillWidth().
 							FontSize(13).
@@ -872,8 +874,8 @@ func (a *App) renderComposer(c *mygoui.Context, dragOver bool) {
 					Justify(mygoui.Center).
 					AlignItems(mygoui.Center).
 					Disabled(!canSend).
-					Label("发送").
-					Tooltip("发送消息 (Enter)")
+					Label(t.Send).
+					Tooltip(t.SendTooltip)
 				if canSend {
 					sendBtn.Cursor(mygoui.CursorPointer)
 				}
@@ -898,14 +900,15 @@ func (a *App) submitComposer() {
 }
 
 func (a *App) copyText(text string, concealed bool) {
+	t := tr(a.state.Locale())
 	if err := a.writeClipboardText(text, concealed); err != nil {
-		a.state.SetToast("复制失败："+err.Error(), true)
+		a.state.SetToast(t.CopyFailedPref+err.Error(), true)
 		return
 	}
 	if concealed {
-		a.state.SetToast("已隐私复制（不留历史）", false)
+		a.state.SetToast(t.CopiedPrivateToast, false)
 	} else {
-		a.state.SetToast("已复制到剪贴板", false)
+		a.state.SetToast(t.CopiedToast, false)
 	}
 }
 
@@ -916,7 +919,7 @@ func (a *App) triggerAttachFile() {
 	go func() {
 		paths, err := a.openFileDialog()
 		if err != nil {
-			a.state.SetToast("打开文件选择器失败："+err.Error(), true)
+			a.state.SetToast(tr(a.state.Locale()).OpenDialogFailPref+err.Error(), true)
 			return
 		}
 		if len(paths) > 0 {
@@ -950,7 +953,7 @@ func (a *App) triggerPasteClipboard() {
 			return
 		}
 	}
-	a.state.SetToast("剪贴板中没有可发送的图片、文件或文字", false)
+	a.state.SetToast(tr(a.state.Locale()).ClipboardEmpty, false)
 }
 
 func (a *App) sendFiles(paths []string) {

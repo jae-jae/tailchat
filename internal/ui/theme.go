@@ -200,7 +200,7 @@ func zenCircleBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label string, 
 }
 
 // zenPairHeaderBtn renders the dedicated top-right Pair CTA pill button.
-func zenPairHeaderBtn(c *mygoui.Context, active bool) mygoui.Element {
+func zenPairHeaderBtn(c *mygoui.Context, label, tooltip string, active bool) mygoui.Element {
 	btn := mygoui.ButtonBase(c.Key("btn-pair"))
 
 	bg := zenAccentSoft
@@ -237,11 +237,11 @@ func zenPairHeaderBtn(c *mygoui.Context, active bool) mygoui.Element {
 		Justify(mygoui.Center).
 		AlignItems(mygoui.Center).
 		Cursor(mygoui.CursorPointer).
-		Label("配对").
-		Tooltip("配对新设备").
+		Label(label).
+		Tooltip(tooltip).
 		Children(func() {
 			mygoui.Icon(c, iconQRCode).Size(14, 14).TextColor(fg)
-			mygoui.Text(c, "配对").FontSize(12.5).Bold().TextColor(fg).NoWrap()
+			mygoui.Text(c, label).FontSize(12.5).Bold().TextColor(fg).NoWrap()
 		})
 	return btn
 }

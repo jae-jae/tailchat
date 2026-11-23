@@ -140,13 +140,29 @@ func Run(api model.AppAPI, onReady func()) error {
 
 		// Desktop-only integrations: system tray & global hotkey.
 		if isDesktopPlatform() {
-			if t := setupSystemTray(toggleWindow, func() {
+			onQuickPair := func() {
 				showAndFocus()
 				app.OpenPairingModal()
-			}); t != nil {
+			}
+			if t := setupSystemTray(state.Locale(), toggleWindow, onQuickPair); t != nil {
 				mu.Lock()
 				tray = t
 				mu.Unlock()
+
+				state.SetOnConfigChanged(func(cfg model.AppConfig) {
+					loc := ResolveLocale(cfg.Language)
+					mygo.RunOnMain(func() {
+						mu.Lock()
+						curTray := tray
+						isClosed := closed
+						mu.Unlock()
+						if curTray == nil || isClosed {
+							return
+						}
+						curTray.SetMenu(buildTrayMenu(loc, toggleWindow, onQuickPair))
+						curTray.SetToolTip(tr(loc).TrayTooltip)
+					})
+				})
 			}
 
 			hotkey := state.Config().GlobalHotkey
@@ -163,6 +179,7 @@ func Run(api model.AppAPI, onReady func()) error {
 			if !mygo.NotificationsSupported() {
 				return
 			}
+			t := tr(state.Locale())
 			mygo.RunOnMain(func() {
 				if w.IsVisible() && w.IsFocused() {
 					return
@@ -173,10 +190,10 @@ func Run(api model.AppAPI, onReady func()) error {
 				}
 				body := msg.TextBody
 				if msg.Kind == model.MessageKindFile && msg.File != nil {
-					body = fmt.Sprintf("Shared file: %s (%s)", msg.File.FileName, FormatBytes(msg.File.FileSize))
+					body = fmt.Sprintf(t.NotifySharedFileF, msg.File.FileName, FormatBytes(msg.File.FileSize))
 				}
 				if body == "" {
-					body = "New message received"
+					body = t.NotifyNewMessage
 				}
 				n := mygo.NewNotification(mygo.NotificationOptions{
 					Title: title,
@@ -204,32 +221,35 @@ func isDesktopPlatform() bool {
 	return runtime.GOOS != "ios" && runtime.GOOS != "android"
 }
 
-func setupSystemTray(onToggle func(), onQuickPair func()) *mygo.Tray {
-	menu := mygo.NewMenu([]*mygo.MenuItem{
+func buildTrayMenu(loc Locale, onToggle func(), onQuickPair func()) *mygo.Menu {
+	t := tr(loc)
+	return mygo.NewMenu([]*mygo.MenuItem{
 		{
 			ID:    "toggle",
-			Label: "Show / Hide TailChat",
+			Label: t.TrayShowHide,
 			Click: func(*mygo.MenuItem, *mygo.Window) { onToggle() },
 		},
 		{
 			ID:    "pair",
-			Label: "Quick Pair...",
+			Label: t.TrayQuickPair,
 			Click: func(*mygo.MenuItem, *mygo.Window) { onQuickPair() },
 		},
 		mygo.Separator(),
 		{
 			ID:    "quit",
-			Label: "Quit TailChat",
+			Label: t.TrayQuit,
 			Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() },
 		},
 	})
+}
 
+func setupSystemTray(loc Locale, onToggle func(), onQuickPair func()) *mygo.Tray {
 	opts := mygo.TrayOptions{
 		ID:             "tailchat-tray",
 		Icon:           renderTrayIconPNG(),
 		IconIsTemplate: runtime.GOOS == "darwin",
-		ToolTip:        "TailChat — Private P2P Device Mesh",
-		Menu:           menu,
+		ToolTip:        tr(loc).TrayTooltip,
+		Menu:           buildTrayMenu(loc, onToggle, onQuickPair),
 	}
 	t, err := mygo.NewTray(opts)
 	if err != nil {

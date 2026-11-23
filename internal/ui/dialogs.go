@@ -15,6 +15,7 @@ import (
 // SettingsDraft holds editable form fields for the Settings modal.
 type SettingsDraft struct {
 	DeviceName        string
+	LanguageIdx       int // 0: auto, 1: en, 2: zh
 	DERPModeIdx       int // 0: default_tailcat, 1: custom_region, 2: custom_map_url
 	RegionIDStr       string
 	CustomHost        string
@@ -29,8 +30,35 @@ type SettingsDraft struct {
 	DownloadDir       string
 }
 
+// SelectedLanguage returns the model.Language* constant corresponding to LanguageIdx.
+func (d SettingsDraft) SelectedLanguage() string {
+	switch d.LanguageIdx {
+	case 1:
+		return model.LanguageEnglish
+	case 2:
+		return model.LanguageChinese
+	default:
+		return model.LanguageAuto
+	}
+}
+
+// SelectedLocale resolves the currently chosen draft language for live Settings preview.
+func (d SettingsDraft) SelectedLocale() Locale {
+	return ResolveLocale(d.SelectedLanguage())
+}
+
 // NewSettingsDraft initializes a SettingsDraft from an existing AppConfig.
 func NewSettingsDraft(cfg model.AppConfig) SettingsDraft {
+	langIdx := 0
+	switch model.NormalizeLanguage(cfg.Language) {
+	case model.LanguageEnglish:
+		langIdx = 1
+	case model.LanguageChinese:
+		langIdx = 2
+	default:
+		langIdx = 0
+	}
+
 	modeIdx := 0
 	switch cfg.DERP.Mode {
 	case model.DERPModeCustomRegion:
@@ -59,6 +87,7 @@ func NewSettingsDraft(cfg model.AppConfig) SettingsDraft {
 
 	return SettingsDraft{
 		DeviceName:        cfg.DeviceName,
+		LanguageIdx:       langIdx,
 		DERPModeIdx:       modeIdx,
 		RegionIDStr:       strconv.Itoa(regionID),
 		CustomHost:        cfg.DERP.CustomHost,
@@ -76,25 +105,27 @@ func NewSettingsDraft(cfg model.AppConfig) SettingsDraft {
 
 // ToConfig validates and converts the draft back into a model.AppConfig.
 func (d SettingsDraft) ToConfig() (model.AppConfig, error) {
+	t := tr(d.SelectedLocale())
+
 	regionID, err := parseIntDefault(d.RegionIDStr, 304)
 	if err != nil || regionID < 0 {
-		return model.AppConfig{}, fmt.Errorf("Region ID 无效")
+		return model.AppConfig{}, fmt.Errorf("%s", t.ErrInvalidRegionID)
 	}
 	derpPort, err := parseIntDefault(d.CustomDERPPortStr, 443)
 	if err != nil || derpPort <= 0 || derpPort > 65535 {
-		return model.AppConfig{}, fmt.Errorf("DERP 端口无效")
+		return model.AppConfig{}, fmt.Errorf("%s", t.ErrInvalidDERPPort)
 	}
 	stunPort, err := parseIntDefault(d.CustomSTUNPortStr, 3478)
 	if err != nil || stunPort <= 0 || stunPort > 65535 {
-		return model.AppConfig{}, fmt.Errorf("STUN 端口无效")
+		return model.AppConfig{}, fmt.Errorf("%s", t.ErrInvalidSTUNPort)
 	}
 	autoMB, err := parseInt64Default(d.AutoDownloadMBStr, 20)
 	if err != nil || autoMB < 0 {
-		return model.AppConfig{}, fmt.Errorf("自动下载阈值 (MB) 无效")
+		return model.AppConfig{}, fmt.Errorf("%s", t.ErrInvalidAutoDL)
 	}
 	rateKBs, err := parseInt64Default(d.RateLimitKBsStr, 0)
 	if err != nil || rateKBs < 0 {
-		return model.AppConfig{}, fmt.Errorf("下载限速 (KB/s) 无效")
+		return model.AppConfig{}, fmt.Errorf("%s", t.ErrInvalidRateLim)
 	}
 
 	derpCfg := model.DERPConfig{
@@ -110,7 +141,7 @@ func (d SettingsDraft) ToConfig() (model.AppConfig, error) {
 	case 1:
 		derpCfg.Mode = model.DERPModeCustomRegion
 		if derpCfg.CustomHost == "" {
-			return model.AppConfig{}, fmt.Errorf("请输入自建 derper 服务器域名或 IP")
+			return model.AppConfig{}, fmt.Errorf("%s", t.ErrNeedCustomHost)
 		}
 		if derpCfg.RegionID < 900 {
 			derpCfg.RegionID = 900
@@ -118,7 +149,7 @@ func (d SettingsDraft) ToConfig() (model.AppConfig, error) {
 	case 2:
 		derpCfg.Mode = model.DERPModeCustomMapURL
 		if derpCfg.DERPMapURL == "" {
-			return model.AppConfig{}, fmt.Errorf("请输入自定义 DERPMap URL")
+			return model.AppConfig{}, fmt.Errorf("%s", t.ErrNeedDERPMapURL)
 		}
 	default:
 		derpCfg.Mode = model.DERPModeDefault
@@ -126,6 +157,7 @@ func (d SettingsDraft) ToConfig() (model.AppConfig, error) {
 
 	return model.AppConfig{
 		DeviceName:           strings.TrimSpace(d.DeviceName),
+		Language:             d.SelectedLanguage(),
 		DERP:                 derpCfg,
 		AutoDownloadMaxBytes: autoMB * 1024 * 1024,
 		MaxDownloadBytesPerS: rateKBs * 1024,
@@ -137,6 +169,7 @@ func (d SettingsDraft) ToConfig() (model.AppConfig, error) {
 
 // renderDevicesPopover renders the lightweight Devices-only popover anchored to the header button.
 func (a *App) renderDevicesPopover(c *mygoui.Context, anchor mygoui.Element, snap ViewSnapshot) {
+	t := tr(snap.Locale)
 	mygoui.PopoverBase(c.Key("popover-devices"), anchor, &a.devicesPopoverOpen, func(panel mygoui.Element) {
 		panel.AttachTo(anchor, mygoui.AnchorBottomRight, mygoui.AnchorTopRight).
 			Margin(8, 0, 0, 0).
@@ -150,16 +183,16 @@ func (a *App) renderDevicesPopover(c *mygoui.Context, anchor mygoui.Element, sna
 		mygoui.Column(c).Gap(10).FillWidth().Children(func() {
 			// Popover header: title + online count badge.
 			mygoui.Row(c).AlignItems(mygoui.Center).Gap(8).FillWidth().Children(func() {
-				mygoui.Text(c, "已配对设备").FontSize(13.5).Bold().TextColor(zenInk)
+				mygoui.Text(c, t.PairedDevices).FontSize(13.5).Bold().TextColor(zenInk)
 				mygoui.Spacer(c)
 
 				badgeBg := zenInputFill
 				badgeFg := zenInkMuted
-				badgeText := "仅本机"
+				badgeText := t.OnlyThisDevice
 				if snap.OnlineCount > 0 {
 					badgeBg = zenDirectSoft
 					badgeFg = zenDirectText
-					badgeText = fmt.Sprintf("%d 台在线", snap.OnlineCount)
+					badgeText = fmt.Sprintf(t.OnlineCountBadgeF, snap.OnlineCount)
 				}
 				mygoui.Row(c).
 					Padding(2, 8).
@@ -172,7 +205,7 @@ func (a *App) renderDevicesPopover(c *mygoui.Context, anchor mygoui.Element, sna
 
 			// Compact device list (bounded scroll when there are many paired devices).
 			if len(snap.Devices) == 0 {
-				mygoui.Text(c, "暂无已配对设备").FontSize(12).TextColor(zenInkMuted)
+				mygoui.Text(c, t.NoPairedDevices).FontSize(12).TextColor(zenInkMuted)
 			} else if len(snap.Devices) > 4 {
 				mygoui.Scroll(c.Key("popover-dev-scroll")).Height(220).FillWidth().Children(func() {
 					mygoui.Column(c).Gap(7).FillWidth().Children(func() {
@@ -209,10 +242,10 @@ func (a *App) renderDevicesPopover(c *mygoui.Context, anchor mygoui.Element, sna
 				Justify(mygoui.Center).
 				AlignItems(mygoui.Center).
 				Cursor(mygoui.CursorPointer).
-				Label("配对新设备").
+				Label(t.PairNewDevice).
 				Children(func() {
 					mygoui.Icon(c, iconQRCode).Size(14, 14).TextColor(zenAccent)
-					mygoui.Text(c, "配对新设备").FontSize(12).FontWeight(600).TextColor(zenAccent).NoWrap()
+					mygoui.Text(c, t.PairNewDevice).FontSize(12).FontWeight(600).TextColor(zenAccent).NoWrap()
 				})
 			if footBtn.Clicked() {
 				a.devicesPopoverOpen = false
@@ -227,7 +260,8 @@ func (a *App) renderDevicesPopover(c *mygoui.Context, anchor mygoui.Element, sna
 }
 
 // renderPairingModal renders the dedicated 2-tab QR-first Pairing modal.
-func (a *App) renderPairingModal(c *mygoui.Context, _ ViewSnapshot) {
+func (a *App) renderPairingModal(c *mygoui.Context, snap ViewSnapshot) {
+	t := tr(snap.Locale)
 	mygoui.DialogBase(c.Key("modal-pair"), &a.pairOpen, func(backdrop, panel mygoui.Element) {
 		backdrop.Background(mygoui.RGBA(15, 23, 42, 0.36))
 		panel.Width(396).
@@ -240,9 +274,9 @@ func (a *App) renderPairingModal(c *mygoui.Context, _ ViewSnapshot) {
 		mygoui.Column(c).Gap(14).FillWidth().Children(func() {
 			// Modal header: title + circular close button.
 			mygoui.Row(c).AlignItems(mygoui.Center).FillWidth().Children(func() {
-				mygoui.Text(c, "配对设备").FontSize(16).Bold().TextColor(zenInk)
+				mygoui.Text(c, t.PairDeviceTitle).FontSize(16).Bold().TextColor(zenInk)
 				mygoui.Spacer(c)
-				if zenCircleBtn(c, "pair-close", iconX, "关闭", false).Clicked() {
+				if zenCircleBtn(c, "pair-close", iconX, t.Close, false).Clicked() {
 					a.pairOpen = false
 				}
 			})
@@ -255,21 +289,21 @@ func (a *App) renderPairingModal(c *mygoui.Context, _ ViewSnapshot) {
 				Background(zenInputFill).
 				FillWidth().
 				Children(func() {
-					a.renderPairTabBtn(c, "pair-tab-qr", iconQRCode, "扫码配对", a.pairTab == 0, func() {
+					a.renderPairTabBtn(c, "pair-tab-qr", iconQRCode, t.TabScanQR, a.pairTab == 0, func() {
 						a.pairTab = 0
 						a.pairErr = ""
 						a.ensurePairingCode()
 					})
-					a.renderPairTabBtn(c, "pair-tab-join", iconLink, "输入配对码加入", a.pairTab == 1, func() {
+					a.renderPairTabBtn(c, "pair-tab-join", iconLink, t.TabJoinCode, a.pairTab == 1, func() {
 						a.pairTab = 1
 						a.pairErr = ""
 					})
 				})
 
 			if a.pairTab == 0 {
-				a.renderPairingQRTab(c)
+				a.renderPairingQRTab(c, snap.Locale)
 			} else {
-				a.renderPairingJoinTab(c)
+				a.renderPairingJoinTab(c, snap.Locale)
 			}
 
 			if a.pairErr != "" {
@@ -313,7 +347,8 @@ func (a *App) renderPairTabBtn(c *mygoui.Context, key string, icon *mygoui.SVG, 
 	}
 }
 
-func (a *App) renderPairingQRTab(c *mygoui.Context) {
+func (a *App) renderPairingQRTab(c *mygoui.Context, loc Locale) {
+	t := tr(loc)
 	if a.pairCode == "" && a.pairErr == "" {
 		a.ensurePairingCode()
 	}
@@ -351,15 +386,15 @@ func (a *App) renderPairingQRTab(c *mygoui.Context) {
 				Children(func() {
 					if expired {
 						mygoui.Column(c).Gap(10).AlignItems(mygoui.Center).Children(func() {
-							mygoui.Text(c, "配对二维码已过期").FontSize(12.5).Bold().TextColor(zenInk).NoWrap()
-							if zenPillBtn(c, "btn-regen-pair", "重新生成", true, false).Clicked() {
+							mygoui.Text(c, t.QRExpired).FontSize(12.5).Bold().TextColor(zenInk).NoWrap()
+							if zenPillBtn(c, "btn-regen-pair", t.Regenerate, true, false).Clicked() {
 								a.refreshPairingCode()
 							}
 						})
 					} else if qrBmp := a.pairingQRBitmap(); qrBmp != nil {
 						mygoui.Image(c, qrBmp).Size(176, 176)
 					} else {
-						mygoui.Text(c, "正在生成二维码…").FontSize(12).TextColor(zenInkMuted)
+						mygoui.Text(c, t.GeneratingQR).FontSize(12).TextColor(zenInkMuted)
 					}
 				})
 
@@ -378,7 +413,7 @@ func (a *App) renderPairingQRTab(c *mygoui.Context) {
 							Radius(99).
 							Background(zenDirectSoft).
 							Children(func() {
-								mygoui.Text(c, fmt.Sprintf("有效剩余 %d:%02d", mins, secs)).
+								mygoui.Text(c, fmt.Sprintf(t.ExpiresInF, mins, secs)).
 									FontSize(11).
 									FontWeight(650).
 									TextColor(zenDirectText).
@@ -391,15 +426,15 @@ func (a *App) renderPairingQRTab(c *mygoui.Context) {
 						Radius(99).
 						Background(zenDangerSoft).
 						Children(func() {
-							mygoui.Text(c, "已过期").FontSize(11).FontWeight(650).TextColor(zenDanger).NoWrap()
+							mygoui.Text(c, t.ExpiredBadge).FontSize(11).FontWeight(650).TextColor(zenDanger).NoWrap()
 						})
 				}
-				mygoui.Text(c, "一次配对，全群自动互通").FontSize(12).TextColor(zenInkSecondary).NoWrap()
+				mygoui.Text(c, t.MeshHint).FontSize(12).TextColor(zenInkSecondary).NoWrap()
 			})
 		})
 
 	// Concise helper caption.
-	mygoui.Text(c, "用新设备上的 TailChat 扫码即可加入；若对方无摄像头，可一键复制配对码发送。").
+	mygoui.Text(c, t.QRCaption).
 		FontSize(12).
 		TextColor(zenInkSecondary).
 		TextAlign(mygoui.Center).
@@ -418,14 +453,14 @@ func (a *App) renderPairingQRTab(c *mygoui.Context) {
 		copyBg := zenAccent
 		copyFg := zenSelfBubbleInk
 		copyIcon := iconCopy
-		copyText := "一键复制配对码"
+		copyText := t.CopyPairCode
 
 		if copyDisabled {
 			copyBg = zenInkMuted
 		} else if copied {
 			copyBg = zenDirectText
 			copyIcon = iconCheck
-			copyText = "已复制配对码"
+			copyText = t.CopiedPairCode
 		} else if copyBtn.Pressed() {
 			copyBg = zenAccentPressed
 		} else if copyBtn.Hovered() {
@@ -451,11 +486,11 @@ func (a *App) renderPairingQRTab(c *mygoui.Context) {
 		})
 		if copyBtn.Clicked() && !copyDisabled {
 			if err := a.writeClipboardText(a.pairCode, false); err != nil {
-				a.pairErr = "复制配对码失败：" + err.Error()
+				a.pairErr = t.CopyPairFailPref + err.Error()
 			} else {
 				a.pairErr = ""
 				a.pairCopiedUntil = time.Now().Add(1800 * time.Millisecond)
-				a.state.SetToast("配对码已复制到剪贴板", false)
+				a.state.SetToast(t.PairCodeCopied, false)
 			}
 		}
 
@@ -476,8 +511,8 @@ func (a *App) renderPairingQRTab(c *mygoui.Context) {
 			Justify(mygoui.Center).
 			AlignItems(mygoui.Center).
 			Cursor(mygoui.CursorPointer).
-			Label("刷新二维码").
-			Tooltip("刷新二维码").
+			Label(t.RefreshQR).
+			Tooltip(t.RefreshQR).
 			Children(func() {
 				mygoui.Icon(c, iconRefreshCw).Size(15, 15).TextColor(refFg)
 			})
@@ -487,7 +522,8 @@ func (a *App) renderPairingQRTab(c *mygoui.Context) {
 	})
 }
 
-func (a *App) renderPairingJoinTab(c *mygoui.Context) {
+func (a *App) renderPairingJoinTab(c *mygoui.Context, loc Locale) {
+	t := tr(loc)
 	mygoui.Column(c).
 		Padding(16).
 		Gap(12).
@@ -496,8 +532,8 @@ func (a *App) renderPairingJoinTab(c *mygoui.Context) {
 		Border(1, zenBorder).
 		FillWidth().
 		Children(func() {
-			mygoui.Text(c, "加入已有设备群").FontSize(13).Bold().TextColor(zenInk)
-			mygoui.Text(c, "在另一台已配对设备上点击「一键复制配对码」，粘贴到下方即可与所有设备建立加密 P2P 同步。").
+			mygoui.Text(c, t.JoinGroupTitle).FontSize(13).Bold().TextColor(zenInk)
+			mygoui.Text(c, t.JoinGroupDesc).
 				FontSize(12).
 				TextColor(zenInkSecondary).
 				Wrap()
@@ -512,8 +548,8 @@ func (a *App) renderPairingJoinTab(c *mygoui.Context) {
 				FillWidth().
 				Children(func() {
 					in = mygoui.TextInputBase(c.Key("join-code-input"), &a.joinCodeInput).
-						Placeholder("粘贴 tailchat-pair://…").
-						Label("配对码").
+						Placeholder(t.JoinPlaceholder).
+						Label(t.PairingCodeLabel).
 						FillWidth().
 						FontSize(12.5).
 						TextColor(zenInk)
@@ -536,10 +572,10 @@ func (a *App) renderPairingJoinTab(c *mygoui.Context) {
 					Justify(mygoui.Center).
 					AlignItems(mygoui.Center).
 					Cursor(mygoui.CursorPointer).
-					Label("从剪贴板粘贴").
+					Label(t.PasteFromClipboard).
 					Children(func() {
 						mygoui.Icon(c, iconClipboard).Size(14, 14).TextColor(zenInk)
-						mygoui.Text(c, "从剪贴板粘贴").FontSize(12.5).FontWeight(600).TextColor(zenInk).NoWrap()
+						mygoui.Text(c, t.PasteFromClipboard).FontSize(12.5).FontWeight(600).TextColor(zenInk).NoWrap()
 					})
 				if pasteBtn.Clicked() {
 					txt := ""
@@ -547,11 +583,11 @@ func (a *App) renderPairingJoinTab(c *mygoui.Context) {
 						txt = strings.TrimSpace(a.readClipboardText())
 					}
 					if txt == "" {
-						a.state.SetToast("剪贴板为空，请先复制配对码", false)
+						a.state.SetToast(t.ClipboardNoCode, false)
 					} else {
 						a.joinCodeInput = txt
 						a.pairErr = ""
-						a.state.SetToast("已从剪贴板填入配对码", false)
+						a.state.SetToast(t.PastedPairCode, false)
 					}
 				}
 
@@ -573,12 +609,12 @@ func (a *App) renderPairingJoinTab(c *mygoui.Context) {
 					Justify(mygoui.Center).
 					AlignItems(mygoui.Center).
 					Disabled(!canJoin).
-					Label("立即加入")
+					Label(t.JoinNow)
 				if canJoin {
 					joinBtn.Cursor(mygoui.CursorPointer)
 				}
 				joinBtn.Children(func() {
-					mygoui.Text(c, "立即加入").FontSize(13).FontWeight(600).TextColor(zenSelfBubbleInk).NoWrap()
+					mygoui.Text(c, t.JoinNow).FontSize(13).FontWeight(600).TextColor(zenSelfBubbleInk).NoWrap()
 				})
 
 				if (joinBtn.Clicked() || in.Submitted()) && canJoin {
@@ -596,6 +632,7 @@ func (a *App) renderPairingJoinTab(c *mygoui.Context) {
 }
 
 func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev model.Device) {
+	t := tr(snap.Locale)
 	isSelf := dev.IsSelf || (snap.Identity.DeviceID != "" && dev.DeviceID == snap.Identity.DeviceID)
 	peer, hasPeer := snap.Peers[dev.DeviceID]
 
@@ -604,13 +641,13 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 		title = shortID(dev.DeviceID)
 	}
 
-	subtitle := "离线"
+	subtitle := t.Offline
 	subColor := zenInkMuted
 	online := false
 	statusColor := zenInkMuted
 
 	if isSelf {
-		subtitle = "本机"
+		subtitle = t.ThisDevice
 		subColor = zenAccent
 		online = true
 		statusColor = zenDirect
@@ -618,11 +655,11 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 		online = true
 		switch peer.PathKind {
 		case model.ConnPathDirect:
-			subtitle = "P2P 直连"
+			subtitle = t.P2PDirect
 			subColor = zenDirectText
 			statusColor = zenDirect
 		case model.ConnPathDERP:
-			subtitle = "DERP 中继"
+			subtitle = t.DERPRelay
 			if peer.DERPRegion != "" {
 				subtitle += " · " + peer.DERPRegion
 			}
@@ -636,7 +673,7 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 			subtitle += fmt.Sprintf(" · %.1f ms", peer.LatencyMs)
 		}
 	} else if hasPeer && peer.PathKind == model.ConnPathConnecting {
-		subtitle = "正在连接…"
+		subtitle = t.Connecting
 	}
 
 	mygoui.Row(c.Key("dev-"+dev.DeviceID)).
@@ -660,7 +697,7 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 			}
 
 			if !isSelf {
-				if zenDangerPillBtn(c, "revoke-"+dev.DeviceID, "移除").Clicked() {
+				if zenDangerPillBtn(c, "revoke-"+dev.DeviceID, t.Remove).Clicked() {
 					if err := a.state.RevokeDevice(context.Background(), dev.DeviceID); err != nil {
 						a.devicesErr = err.Error()
 					} else {
@@ -672,6 +709,7 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 }
 
 func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
+	t := tr(a.settingsDraft.SelectedLocale())
 	mygoui.DialogBase(c.Key("modal-settings"), &a.settingsOpen, func(backdrop, panel mygoui.Element) {
 		backdrop.Background(mygoui.RGBA(15, 23, 42, 0.32))
 		panel.Width(440).
@@ -684,9 +722,9 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 		mygoui.Column(c).Gap(12).FillWidth().Children(func() {
 			// Modal header.
 			mygoui.Row(c).AlignItems(mygoui.Center).FillWidth().Children(func() {
-				mygoui.Text(c, "设置与 DERP").FontSize(16).Bold().TextColor(zenInk)
+				mygoui.Text(c, t.SettingsAndDERP).FontSize(16).Bold().TextColor(zenInk)
 				mygoui.Spacer(c)
-				if zenCircleBtn(c, "settings-x", iconX, "关闭设置", false).Clicked() {
+				if zenCircleBtn(c, "settings-x", iconX, t.CloseSettings, false).Clicked() {
 					a.settingsOpen = false
 				}
 			})
@@ -695,26 +733,36 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 
 			// Device Name.
 			mygoui.Column(c).Gap(5).FillWidth().Children(func() {
-				mygoui.Text(c, "设备名称").FontSize(12).FontWeight(600).TextColor(zenInk)
+				mygoui.Text(c, t.DeviceName).FontSize(12).FontWeight(600).TextColor(zenInk)
 				mygoui.TextInput(c.Key("set-device-name"), &a.settingsDraft.DeviceName).
-					Placeholder("我的设备").
-					Label("设备名称").
+					Placeholder(t.MyDevicePlace).
+					Label(t.DeviceName).
 					FillWidth()
+			})
+
+			// Language preference: Auto (fallback English), English, Chinese.
+			mygoui.Column(c).Gap(5).FillWidth().Children(func() {
+				mygoui.Text(c, t.Language).FontSize(12).FontWeight(600).TextColor(zenInk)
+				mygoui.Segmented(c.Key("set-language"), &a.settingsDraft.LanguageIdx,
+					t.LanguageAuto,
+					t.LanguageEnglish,
+					t.LanguageChinese,
+				).Label(t.Language).FillEqually()
 			})
 
 			// DERP Relay Server.
 			mygoui.Column(c).Gap(7).FillWidth().Children(func() {
-				mygoui.Text(c, "DERP 中继服务器").FontSize(12).FontWeight(600).TextColor(zenInk)
+				mygoui.Text(c, t.DERPServer).FontSize(12).FontWeight(600).TextColor(zenInk)
 				mygoui.Segmented(c.Key("set-derp-mode"), &a.settingsDraft.DERPModeIdx,
-					"默认 tailcat",
-					"自建 derper",
-					"自定义 DERPMap",
-				).Label("DERP 模式").FillEqually()
+					t.DERPDefault,
+					t.DERPSelfHosted,
+					t.DERPCustomMap,
+				).Label(t.DERPModeLabel).FillEqually()
 
 				switch a.settingsDraft.DERPModeIdx {
 				case 0:
 					mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
-						mygoui.Text(c, "首选 Region ID").FontSize(12).TextColor(zenInkSecondary)
+						mygoui.Text(c, t.PreferredRegionID).FontSize(12).TextColor(zenInkSecondary)
 						mygoui.TextInput(c.Key("set-region-id"), &a.settingsDraft.RegionIDStr).
 							Placeholder("304").
 							Label("Region ID").
@@ -724,20 +772,20 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 					mygoui.Column(c).Gap(6).FillWidth().Children(func() {
 						mygoui.TextInput(c.Key("set-custom-host"), &a.settingsDraft.CustomHost).
 							Placeholder("derp.example.com").
-							Label("自建 DERP 域名").
+							Label(t.CustomDERPHost).
 							FillWidth()
 						mygoui.Row(c).Gap(6).FillWidth().Children(func() {
 							mygoui.TextInput(c.Key("set-derp-port"), &a.settingsDraft.CustomDERPPortStr).
 								Placeholder("443").
-								Label("DERP 端口").
+								Label(t.DERPPort).
 								Grow(1)
 							mygoui.TextInput(c.Key("set-stun-port"), &a.settingsDraft.CustomSTUNPortStr).
 								Placeholder("3478").
-								Label("STUN 端口").
+								Label(t.STUNPort).
 								Grow(1)
 							mygoui.TextInput(c.Key("set-region-name"), &a.settingsDraft.CustomRegionName).
-								Placeholder("自建节点").
-								Label("区域名称").
+								Placeholder(t.CustomNodePlace).
+								Label(t.RegionName).
 								Grow(1)
 						})
 					})
@@ -749,7 +797,7 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 				}
 
 				mygoui.Row(c).Gap(8).Children(func() {
-					if zenPillBtn(c, "btn-hotswitch-derp", "应用并热切 DERP", true, false).Clicked() {
+					if zenPillBtn(c, "btn-hotswitch-derp", t.ApplyHotSwitchDERP, true, false).Clicked() {
 						cfg, err := a.settingsDraft.ToConfig()
 						if err != nil {
 							a.settingsErr = err.Error()
@@ -768,22 +816,22 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 			// Transfers & Desktop Preferences.
 			mygoui.Row(c).Gap(10).FillWidth().Children(func() {
 				mygoui.Column(c).Gap(5).Grow(1).Children(func() {
-					mygoui.Text(c, "自动下载阈值 (MB)").FontSize(12).FontWeight(600).TextColor(zenInk)
+					mygoui.Text(c, t.AutoDownloadMB).FontSize(12).FontWeight(600).TextColor(zenInk)
 					mygoui.TextInput(c.Key("set-autodl-mb"), &a.settingsDraft.AutoDownloadMBStr).
 						Placeholder("20").
-						Label("自动下载阈值 (MB)").
+						Label(t.AutoDownloadMB).
 						FillWidth()
 				})
 				mygoui.Column(c).Gap(5).Grow(1).Children(func() {
-					mygoui.Text(c, "下载限速 (KB/s)").FontSize(12).FontWeight(600).TextColor(zenInk)
+					mygoui.Text(c, t.DownloadLimitKBs).FontSize(12).FontWeight(600).TextColor(zenInk)
 					mygoui.TextInput(c.Key("set-rate-kbs"), &a.settingsDraft.RateLimitKBsStr).
 						Placeholder("0").
-						Label("下载限速 (KB/s)").
+						Label(t.DownloadLimitKBs).
 						FillWidth()
 				})
 			})
 
-			mygoui.Checkbox(c.Key("set-min-tray"), &a.settingsDraft.MinimizeToTray, "关闭窗口时最小化到托盘")
+			mygoui.Checkbox(c.Key("set-min-tray"), &a.settingsDraft.MinimizeToTray, t.MinimizeToTray)
 
 			if a.settingsErr != "" {
 				mygoui.Text(c, a.settingsErr).FontSize(12).TextColor(zenDanger).Wrap()
@@ -791,10 +839,10 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 
 			// Footer actions.
 			mygoui.Row(c).Gap(8).Justify(mygoui.End).FillWidth().Children(func() {
-				if zenPillBtn(c, "settings-close", "关闭", false, false).Clicked() {
+				if zenPillBtn(c, "settings-close", t.Close, false, false).Clicked() {
 					a.settingsOpen = false
 				}
-				if zenPillBtn(c, "btn-save-settings", "保存设置", true, false).Clicked() {
+				if zenPillBtn(c, "btn-save-settings", t.SaveSettings, true, false).Clicked() {
 					cfg, err := a.settingsDraft.ToConfig()
 					if err != nil {
 						a.settingsErr = err.Error()

@@ -51,6 +51,7 @@ func newMockAppAPI() *mockAppAPI {
 		},
 		config: model.AppConfig{
 			DeviceName:           "MacBook Pro",
+			Language:             model.LanguageChinese,
 			DERP:                 model.DefaultDERPConfig(),
 			AutoDownloadMaxBytes: 20 * 1024 * 1024,
 			MaxDownloadBytesPerS: 0,
@@ -843,3 +844,133 @@ func TestRenderZenSnapshot2x(t *testing.T) {
 	appDev.devicesPopoverOpen = true
 	assertValid2xRender(t, mygoui.Render(appDev.View, 540, 740, 2), outDir, "04_devices_popover.png")
 }
+
+func TestLocaleResolutionAndFallback(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want Locale
+	}{
+		{"zh", LocaleZH},
+		{"zh_CN.UTF-8", LocaleZH},
+		{"zh-Hans-CN", LocaleZH},
+		{"zh-TW", LocaleZH},
+		{"en_US.UTF-8", LocaleEN},
+		{"en-GB", LocaleEN},
+		{"ja_JP.UTF-8", LocaleEN},
+		{"fr_FR.UTF-8", LocaleEN},
+		{"de_DE", LocaleEN},
+		{"C", LocaleEN},
+		{"POSIX", LocaleEN},
+		{"", LocaleEN},
+	}
+	for _, tc := range cases {
+		if got := parseSystemLocale(tc.raw); got != tc.want {
+			t.Errorf("parseSystemLocale(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
+	}
+
+	origDetector := systemLocaleDetector
+	t.Cleanup(func() { systemLocaleDetector = origDetector })
+
+	// System locale = Japanese -> Auto must fall back to English.
+	systemLocaleDetector = func() Locale { return parseSystemLocale("ja_JP.UTF-8") }
+	if got := ResolveLocale(model.LanguageAuto); got != LocaleEN {
+		t.Fatalf("Auto with ja_JP must fall back to English, got %q", got)
+	}
+	if got := ResolveLocale(""); got != LocaleEN {
+		t.Fatalf("empty preference must fall back to English, got %q", got)
+	}
+	if got := ResolveLocale(model.LanguageChinese); got != LocaleZH {
+		t.Fatalf("explicit zh must override system locale, got %q", got)
+	}
+
+	// System locale = Chinese -> Auto resolves to Chinese, explicit en overrides to English.
+	systemLocaleDetector = func() Locale { return parseSystemLocale("zh_CN.UTF-8") }
+	if got := ResolveLocale(model.LanguageAuto); got != LocaleZH {
+		t.Fatalf("Auto with zh_CN must resolve to Chinese, got %q", got)
+	}
+	if got := ResolveLocale(model.LanguageEnglish); got != LocaleEN {
+		t.Fatalf("explicit en must override Chinese system locale, got %q", got)
+	}
+}
+
+func TestLanguageSwitchingInSettingsUI(t *testing.T) {
+	origDetector := systemLocaleDetector
+	t.Cleanup(func() { systemLocaleDetector = origDetector })
+	systemLocaleDetector = func() Locale { return LocaleEN }
+
+	mock, _, _, tt := newTestApp(t)
+
+	// Starts in Chinese per mockAppAPI.
+	if !tt.HasText("配对") || !tt.HasText("立即下载") {
+		t.Fatalf("expected initial Chinese UI; texts: %v", tt.Texts())
+	}
+
+	// Open Settings and switch Language to English.
+	if err := tt.Click("设置与 DERP"); err != nil {
+		t.Fatalf("open settings: %v", err)
+	}
+	tt.Frame()
+	if !tt.HasText("语言") || !tt.HasText("自动") || !tt.HasText("English") || !tt.HasText("中文") {
+		t.Fatalf("expected Language segmented options in settings; texts: %v", tt.Texts())
+	}
+
+	if err := tt.Click("English"); err != nil {
+		t.Fatalf("select English: %v", err)
+	}
+	tt.Frame()
+	// Live preview inside Settings modal switches immediately to English.
+	if !tt.HasText("Settings & DERP") || !tt.HasText("Save") {
+		t.Fatalf("expected live English preview in Settings modal; texts: %v", tt.Texts())
+	}
+
+	if err := tt.Click("Save"); err != nil {
+		t.Fatalf("click Save: %v", err)
+	}
+	tt.Frame()
+
+	if got := mock.Config().Language; got != model.LanguageEnglish {
+		t.Fatalf("expected persisted config language %q, got %q", model.LanguageEnglish, got)
+	}
+	for _, want := range []string{"1 online · P2P Direct", "Pair", "Download", "Settings saved"} {
+		if !tt.HasText(want) {
+			t.Fatalf("expected main UI in English to contain %q; texts: %v", want, tt.Texts())
+		}
+	}
+
+	// Open Pairing modal and verify English labels.
+	if err := tt.Click("Pair"); err != nil {
+		t.Fatalf("click Pair: %v", err)
+	}
+	tt.Frame()
+	for _, want := range []string{"Pair Device", "Scan QR", "Enter Code", "Copy Pairing Code"} {
+		if !tt.HasText(want) {
+			t.Fatalf("expected English pairing modal to contain %q; texts: %v", want, tt.Texts())
+		}
+	}
+	if err := tt.Click("Close"); err != nil {
+		t.Fatalf("close English pairing modal: %v", err)
+	}
+	tt.Frame()
+
+	// Switch to Auto while system locale is non-Chinese -> must stay English fallback.
+	if err := tt.Click("Settings & DERP"); err != nil {
+		t.Fatalf("reopen settings: %v", err)
+	}
+	tt.Frame()
+	if err := tt.Click("Auto"); err != nil {
+		t.Fatalf("select Auto: %v", err)
+	}
+	tt.Frame()
+	if err := tt.Click("Save"); err != nil {
+		t.Fatalf("save Auto: %v", err)
+	}
+	tt.Frame()
+	if got := mock.Config().Language; got != model.LanguageAuto {
+		t.Fatalf("expected persisted config language %q, got %q", model.LanguageAuto, got)
+	}
+	if !tt.HasText("Pair") || !tt.HasText("Download") {
+		t.Fatalf("expected Auto with English fallback to render English UI; texts: %v", tt.Texts())
+	}
+}
+

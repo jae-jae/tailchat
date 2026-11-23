@@ -15,6 +15,7 @@ import (
 type ViewSnapshot struct {
 	Identity        model.LocalIdentity
 	Config          model.AppConfig
+	Locale          Locale
 	Messages        []model.Message
 	SearchQuery     string
 	SearchResults   []model.Message
@@ -48,6 +49,7 @@ type State struct {
 	toastExpiresAt  time.Time
 	onInvalidate    func()
 	onRemoteMessage func(model.Message)
+	onConfigChanged func(model.AppConfig)
 
 	subMu       sync.Mutex
 	unsub       func()
@@ -60,7 +62,7 @@ type State struct {
 func NewState(api model.AppAPI) *State {
 	return &State{
 		api:       api,
-		config:    model.AppConfig{MinimizeToTray: true},
+		config:    model.AppConfig{Language: model.LanguageAuto, MinimizeToTray: true},
 		peers:     make(map[string]model.PeerConnStatus),
 		transfers: make(map[string]model.TransferTask),
 	}
@@ -80,6 +82,22 @@ func (s *State) SetOnRemoteMessage(fn func(model.Message)) {
 	s.mu.Lock()
 	s.onRemoteMessage = fn
 	s.mu.Unlock()
+}
+
+// SetOnConfigChanged registers a callback fired whenever AppConfig updates.
+func (s *State) SetOnConfigChanged(fn func(model.AppConfig)) {
+	s.mu.Lock()
+	s.onConfigChanged = fn
+	s.mu.Unlock()
+}
+
+func (s *State) notifyConfigChanged(cfg model.AppConfig) {
+	s.mu.RLock()
+	fn := s.onConfigChanged
+	s.mu.RUnlock()
+	if fn != nil {
+		fn(cfg)
+	}
 }
 
 func (s *State) notifyInvalidate() {
@@ -258,6 +276,7 @@ func (s *State) handleEvent(ev model.AppEvent) {
 		s.mu.Lock()
 		s.config = cfg
 		s.mu.Unlock()
+		s.notifyConfigChanged(cfg)
 	case model.EventError:
 		if ev.ErrText != "" {
 			s.SetToast(ev.ErrText, true)
@@ -302,6 +321,11 @@ func (s *State) Config() model.AppConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.config
+}
+
+// Locale returns the resolved UI Locale for the active AppConfig.Language preference.
+func (s *State) Locale() Locale {
+	return ResolveLocale(s.Config().Language)
 }
 
 // SetToast displays a transient status or error banner in the UI.
@@ -365,7 +389,8 @@ func (s *State) Snapshot() ViewSnapshot {
 		transfers[k] = v
 	}
 
-	connTxt := formatConnectivityLabel(onlineCount, hasDirect, hasDERP)
+	loc := ResolveLocale(s.config.Language)
+	connTxt := formatConnectivityLabel(loc, onlineCount, hasDirect, hasDERP)
 
 	toastTxt := s.toastText
 	toastErr := s.toastIsErr
@@ -377,6 +402,7 @@ func (s *State) Snapshot() ViewSnapshot {
 	return ViewSnapshot{
 		Identity:        s.identity,
 		Config:          s.config,
+		Locale:          loc,
 		Messages:        msgs,
 		SearchQuery:     s.searchQuery,
 		SearchResults:   searchRes,
@@ -393,17 +419,18 @@ func (s *State) Snapshot() ViewSnapshot {
 	}
 }
 
-func formatConnectivityLabel(onlineCount int, hasDirect, hasDERP bool) string {
+func formatConnectivityLabel(loc Locale, onlineCount int, hasDirect, hasDERP bool) string {
+	t := tr(loc)
 	if onlineCount == 0 {
-		return "离线 · 等待设备连接"
+		return t.ConnOffline
 	}
 	if hasDirect && hasDERP {
-		return fmt.Sprintf("%d 台设备在线 · P2P 直连 + DERP", onlineCount)
+		return fmt.Sprintf(t.ConnDirectDERPF, onlineCount)
 	}
 	if hasDirect {
-		return fmt.Sprintf("%d 台设备在线 · P2P 直连", onlineCount)
+		return fmt.Sprintf(t.ConnDirectF, onlineCount)
 	}
-	return fmt.Sprintf("%d 台设备在线 · DERP 中继", onlineCount)
+	return fmt.Sprintf(t.ConnDERPF, onlineCount)
 }
 
 // SetSearchQuery updates the live FTS5 search query and reloads matching messages.
@@ -443,7 +470,7 @@ func (s *State) SendText(ctx context.Context, text string) error {
 	}
 	msg, err := s.api.SendText(ctx, trimmed)
 	if err != nil {
-		s.SetToast("发送失败："+err.Error(), true)
+		s.SetToast(tr(s.Locale()).ToastSendFailPref+err.Error(), true)
 		return err
 	}
 	if msg != nil {
@@ -460,16 +487,17 @@ func (s *State) SendFile(ctx context.Context, path string) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}
+	t := tr(s.Locale())
 	msg, err := s.api.SendFile(ctx, path)
 	if err != nil {
-		s.SetToast("发送文件失败："+err.Error(), true)
+		s.SetToast(t.ToastFileFailPref+err.Error(), true)
 		return err
 	}
 	if msg != nil {
 		s.mu.Lock()
 		s.upsertMessageLocked(*msg)
 		s.mu.Unlock()
-		s.SetToast("已发送文件："+fileDisplayName(msg, path), false)
+		s.SetToast(t.ToastFileSentPref+fileDisplayName(msg, path), false)
 	}
 	return nil
 }
@@ -479,16 +507,17 @@ func (s *State) SendBytes(ctx context.Context, fileName, mimeType string, data [
 	if len(data) == 0 {
 		return nil
 	}
+	t := tr(s.Locale())
 	msg, err := s.api.SendBytes(ctx, fileName, mimeType, data)
 	if err != nil {
-		s.SetToast("发送粘贴内容失败："+err.Error(), true)
+		s.SetToast(t.ToastPasteFailPref+err.Error(), true)
 		return err
 	}
 	if msg != nil {
 		s.mu.Lock()
 		s.upsertMessageLocked(*msg)
 		s.mu.Unlock()
-		s.SetToast("已发送 "+fileName, false)
+		s.SetToast(t.ToastSentPref+fileName, false)
 	}
 	return nil
 }
@@ -496,7 +525,7 @@ func (s *State) SendBytes(ctx context.Context, fileName, mimeType string, data [
 // DeleteMessage deletes a message via AppAPI.
 func (s *State) DeleteMessage(ctx context.Context, msgID string) error {
 	if err := s.api.DeleteMessage(ctx, msgID); err != nil {
-		s.SetToast("删除失败："+err.Error(), true)
+		s.SetToast(tr(s.Locale()).ToastDelFailPref+err.Error(), true)
 		return err
 	}
 	s.mu.Lock()
@@ -509,7 +538,7 @@ func (s *State) DeleteMessage(ctx context.Context, msgID string) error {
 // DownloadFile starts or resumes downloading a content-addressed file blob.
 func (s *State) DownloadFile(ctx context.Context, blobHash string) error {
 	if err := s.api.DownloadFile(ctx, blobHash); err != nil {
-		s.SetToast("下载失败："+err.Error(), true)
+		s.SetToast(tr(s.Locale()).ToastDLFailPref+err.Error(), true)
 		return err
 	}
 	if t, err := s.api.GetTransfer(blobHash); err == nil && t != nil {
@@ -524,7 +553,7 @@ func (s *State) DownloadFile(ctx context.Context, blobHash string) error {
 // PauseTransfer pauses an in-flight download.
 func (s *State) PauseTransfer(blobHash string) error {
 	if err := s.api.PauseTransfer(blobHash); err != nil {
-		s.SetToast("暂停失败："+err.Error(), true)
+		s.SetToast(tr(s.Locale()).ToastPauseFailPref+err.Error(), true)
 		return err
 	}
 	if t, err := s.api.GetTransfer(blobHash); err == nil && t != nil {
@@ -539,7 +568,7 @@ func (s *State) PauseTransfer(blobHash string) error {
 // CancelTransfer cancels an in-flight or paused download.
 func (s *State) CancelTransfer(blobHash string) error {
 	if err := s.api.CancelTransfer(blobHash); err != nil {
-		s.SetToast("取消失败："+err.Error(), true)
+		s.SetToast(tr(s.Locale()).ToastCancelFailPre+err.Error(), true)
 		return err
 	}
 	if t, err := s.api.GetTransfer(blobHash); err == nil && t != nil {
@@ -555,7 +584,7 @@ func (s *State) CancelTransfer(blobHash string) error {
 func (s *State) CreatePairingCode(ctx context.Context, ttlSeconds int) (string, model.PairingToken, error) {
 	code, tok, err := s.api.CreatePairingCode(ctx, ttlSeconds)
 	if err != nil {
-		s.SetToast("生成配对码失败："+err.Error(), true)
+		s.SetToast(tr(s.Locale()).ToastPairFailPref+err.Error(), true)
 		return "", model.PairingToken{}, err
 	}
 	return code, tok, nil
@@ -568,49 +597,54 @@ func (s *State) CancelPairing() error {
 
 // JoinWithPairingCode joins an existing group using a pairing code.
 func (s *State) JoinWithPairingCode(ctx context.Context, code string) error {
+	t := tr(s.Locale())
 	trimmed := strings.TrimSpace(code)
 	if trimmed == "" {
-		return fmt.Errorf("配对码不能为空")
+		return fmt.Errorf("%s", t.ErrEmptyPairCode)
 	}
 	if err := s.api.JoinWithPairingCode(ctx, trimmed); err != nil {
-		s.SetToast("加入设备群失败："+err.Error(), true)
+		s.SetToast(t.ToastJoinFailPref+err.Error(), true)
 		return err
 	}
 	s.RefreshAll()
-	s.SetToast("已加入设备群", false)
+	s.SetToast(t.ToastJoinedGroup, false)
 	return nil
 }
 
 // RevokeDevice revokes a paired device and disconnects its tunnels.
 func (s *State) RevokeDevice(ctx context.Context, deviceID string) error {
+	t := tr(s.Locale())
 	if err := s.api.RevokeDevice(ctx, deviceID); err != nil {
-		s.SetToast("移除设备失败："+err.Error(), true)
+		s.SetToast(t.ToastRevokeFailPre+err.Error(), true)
 		return err
 	}
 	s.RefreshAll()
-	s.SetToast("已移除设备", false)
+	s.SetToast(t.ToastRevokedDevice, false)
 	return nil
 }
 
 // ApplySettings persists config updates and optionally hot-switches DERP settings.
 func (s *State) ApplySettings(ctx context.Context, cfg model.AppConfig, hotSwitchDERP bool) error {
 	if err := s.api.UpdateConfig(ctx, cfg); err != nil {
-		s.SetToast("保存设置失败："+err.Error(), true)
+		s.SetToast(tr(s.Locale()).ToastSaveFailPref+err.Error(), true)
 		return err
 	}
 	if hotSwitchDERP {
 		if err := s.api.UpdateDERP(ctx, cfg.DERP); err != nil {
-			s.SetToast("DERP 切换失败："+err.Error(), true)
+			s.SetToast(tr(s.Locale()).ToastDERPFailPref+err.Error(), true)
 			return err
 		}
 	}
+	newCfg := s.api.Config()
 	s.mu.Lock()
-	s.config = s.api.Config()
+	s.config = newCfg
 	s.mu.Unlock()
+	s.notifyConfigChanged(newCfg)
+	t := tr(ResolveLocale(newCfg.Language))
 	if hotSwitchDERP {
-		s.SetToast("已切换 DERP 服务器", false)
+		s.SetToast(t.ToastDERPSwitched, false)
 	} else {
-		s.SetToast("设置已保存", false)
+		s.SetToast(t.ToastSettingsSaved, false)
 	}
 	return nil
 }
@@ -661,21 +695,7 @@ func FormatTimestamp(unixMilli int64) string {
 }
 
 // FormatTimeChip formats a UnixMilli timestamp into a Zen Popover timeline pill label
-// such as "今天 14:12", "昨天 18:30", or "11-21 09:05".
+// using the auto-detected locale (falling back to English).
 func FormatTimeChip(unixMilli int64) string {
-	if unixMilli <= 0 {
-		return ""
-	}
-	t := time.UnixMilli(unixMilli).Local()
-	now := time.Now().Local()
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	yesterdayStart := todayStart.AddDate(0, 0, -1)
-	switch {
-	case !t.Before(todayStart):
-		return "今天 " + t.Format("15:04")
-	case !t.Before(yesterdayStart):
-		return "昨天 " + t.Format("15:04")
-	default:
-		return t.Format("01-02 15:04")
-	}
+	return FormatTimeChipLocale(ResolveLocale(model.LanguageAuto), unixMilli)
 }

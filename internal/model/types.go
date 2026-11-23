@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -257,9 +258,29 @@ func (p PairingToken) IsExpired(now time.Time) bool {
 	return p.ExpiresAt > 0 && now.UnixMilli() > p.ExpiresAt
 }
 
+// Language preference values for AppConfig.Language.
+const (
+	LanguageAuto    = "auto"
+	LanguageEnglish = "en"
+	LanguageChinese = "zh"
+)
+
+// NormalizeLanguage canonicalizes a stored language preference into "auto", "en", or "zh".
+func NormalizeLanguage(lang string) string {
+	switch strings.ToLower(strings.TrimSpace(lang)) {
+	case LanguageEnglish, "en-us", "en-gb", "en_us", "en_gb":
+		return LanguageEnglish
+	case LanguageChinese, "zh-cn", "zh-tw", "zh-hans", "zh-hant", "zh_cn", "zh_tw":
+		return LanguageChinese
+	default:
+		return LanguageAuto
+	}
+}
+
 // AppConfig holds user-editable runtime settings.
 type AppConfig struct {
 	DeviceName           string     `json:"device_name"`
+	Language             string     `json:"language,omitempty"` // "auto" (default, fallback en), "en", "zh"
 	DERP                 DERPConfig `json:"derp"`
 	AutoDownloadMaxBytes int64      `json:"auto_download_max_bytes"`
 	MaxDownloadBytesPerS int64      `json:"max_download_bytes_per_s"` // 0 = unlimited

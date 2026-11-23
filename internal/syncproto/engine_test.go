@@ -1411,14 +1411,29 @@ func TestDefaultConfigMinimizeToTray(t *testing.T) {
 	if !cfg.MinimizeToTray {
 		t.Fatalf("expected MinimizeToTray to default to true, got false")
 	}
+	if cfg.Language != model.LanguageAuto {
+		t.Fatalf("expected Language to default to %q, got %q", model.LanguageAuto, cfg.Language)
+	}
 
 	cfg.MinimizeToTray = false
+	cfg.Language = model.LanguageEnglish
 	if err := n.svc.UpdateConfig(context.Background(), cfg); err != nil {
 		t.Fatalf("UpdateConfig: %v", err)
 	}
 	got := n.svc.Config()
 	if got.MinimizeToTray {
 		t.Fatalf("expected explicit MinimizeToTray=false to be persisted")
+	}
+	if got.Language != model.LanguageEnglish {
+		t.Fatalf("expected explicit Language=%q to be persisted, got %q", model.LanguageEnglish, got.Language)
+	}
+
+	cfg.Language = "fr-FR"
+	if err := n.svc.UpdateConfig(context.Background(), cfg); err != nil {
+		t.Fatalf("UpdateConfig invalid language: %v", err)
+	}
+	if got := n.svc.Config().Language; got != model.LanguageAuto {
+		t.Fatalf("expected unsupported language to normalize to %q, got %q", model.LanguageAuto, got)
 	}
 }
 

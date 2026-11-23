@@ -326,6 +326,11 @@ func (s *Service) UpdateConfig(ctx context.Context, cfg model.AppConfig) error {
 	if cfg.DERP.Mode == "" {
 		cfg.DERP = oldCfg.DERP
 	}
+	if cfg.Language == "" {
+		cfg.Language = model.NormalizeLanguage(oldCfg.Language)
+	} else {
+		cfg.Language = model.NormalizeLanguage(cfg.Language)
+	}
 
 	derpChanged := cfg.DERP != oldCfg.DERP
 
@@ -1028,6 +1033,10 @@ func (s *Service) loadOrCreateConfig(id model.LocalIdentity) (model.AppConfig, e
 			cfg.DERP = model.DefaultDERPConfig()
 			changed = true
 		}
+		if normLang := model.NormalizeLanguage(cfg.Language); cfg.Language != normLang {
+			cfg.Language = normLang
+			changed = true
+		}
 		if changed {
 			if err := s.store.SaveConfig(cfg); err != nil {
 				return model.AppConfig{}, err
@@ -1042,6 +1051,7 @@ func (s *Service) loadOrCreateConfig(id model.LocalIdentity) (model.AppConfig, e
 	}
 	cfg := model.AppConfig{
 		DeviceName:           id.DeviceName,
+		Language:             model.LanguageAuto,
 		DERP:                 model.DefaultDERPConfig(),
 		AutoDownloadMaxBytes: autoDownload,
 		DownloadDir:          s.opts.DownloadDir,
