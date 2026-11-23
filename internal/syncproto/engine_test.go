@@ -1402,3 +1402,23 @@ func TestDeviceRevocation(t *testing.T) {
 		t.Fatalf("B unexpectedly received message from revoked device C")
 	}
 }
+
+func TestDefaultConfigMinimizeToTray(t *testing.T) {
+	net := newMemNetwork()
+	n := newTestNode(t, net, "TrayDefault", 0, 1)
+
+	cfg := n.svc.Config()
+	if !cfg.MinimizeToTray {
+		t.Fatalf("expected MinimizeToTray to default to true, got false")
+	}
+
+	cfg.MinimizeToTray = false
+	if err := n.svc.UpdateConfig(context.Background(), cfg); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+	got := n.svc.Config()
+	if got.MinimizeToTray {
+		t.Fatalf("expected explicit MinimizeToTray=false to be persisted")
+	}
+}
+

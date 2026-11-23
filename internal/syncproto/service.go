@@ -1045,6 +1045,7 @@ func (s *Service) loadOrCreateConfig(id model.LocalIdentity) (model.AppConfig, e
 		DERP:                 model.DefaultDERPConfig(),
 		AutoDownloadMaxBytes: autoDownload,
 		DownloadDir:          s.opts.DownloadDir,
+		MinimizeToTray:       true,
 	}
 	if err := s.store.SaveConfig(cfg); err != nil {
 		return model.AppConfig{}, err

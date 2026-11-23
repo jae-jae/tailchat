@@ -60,6 +60,7 @@ type State struct {
 func NewState(api model.AppAPI) *State {
 	return &State{
 		api:       api,
+		config:    model.AppConfig{MinimizeToTray: true},
 		peers:     make(map[string]model.PeerConnStatus),
 		transfers: make(map[string]model.TransferTask),
 	}
