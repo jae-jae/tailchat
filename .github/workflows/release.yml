@@ -1,0 +1,174 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Verify Tag & Tests
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify tag matches mygo.json version
+        id: meta
+        run: |
+          VERSION="$(jq -r .version mygo.json)"
+          if [ "$GITHUB_REF_NAME" != "v${VERSION}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match mygo.json version v${VERSION}"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Vet & Test
+        run: |
+          go vet ./...
+          go test -count=1 ./...
+
+  build-desktop:
+    name: Desktop (${{ matrix.name }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+            platform: "darwin/arm64,darwin/amd64"
+          - name: Windows
+            os: ubuntu-latest
+            platform: "windows/amd64,windows/arm64"
+          - name: Linux
+            os: ubuntu-latest
+            platform: "linux/amd64,linux/arm64"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install NSIS for Windows installers
+        if: matrix.name == 'Windows' && runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y nsis
+
+      - name: Build ${{ matrix.name }} packages
+        run: go tool mygo build -platform "${{ matrix.platform }}"
+
+      - name: Collect ${{ matrix.name }} release assets
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          shopt -s nullglob
+          for f in \
+            dist/darwin-*/*.dmg \
+            dist/windows-*/*-setup-*.exe \
+            dist/linux-*/*.deb \
+            dist/linux-*/*.rpm \
+            dist/linux-*/*.tar.gz
+          do
+            cp "$f" release-assets/
+          done
+          ls -lh release-assets/
+          if [ -z "$(ls -A release-assets)" ]; then
+            echo "::error::No release assets produced for ${{ matrix.name }}"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.name }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  build-headless:
+    name: Headless Nodes
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Cross-compile tailchat-headless
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          mkdir -p release-assets stage
+          for target in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64; do
+            GOOS="${target%/*}"
+            GOARCH="${target#*/}"
+            EXT=""
+            if [ "$GOOS" = "windows" ]; then
+              EXT=".exe"
+            fi
+            BIN="tailchat-headless${EXT}"
+            echo "Building ${BIN} for ${GOOS}/${GOARCH}..."
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+              go build -trimpath -ldflags="-s -w" -o "stage/${BIN}" ./cmd/tailchat-headless
+            ARCHIVE_BASE="tailchat-headless-${VERSION}-${GOOS}-${GOARCH}"
+            if [ "$GOOS" = "windows" ]; then
+              (cd stage && zip -q "../release-assets/${ARCHIVE_BASE}.zip" "${BIN}")
+            else
+              tar -czf "release-assets/${ARCHIVE_BASE}.tar.gz" -C stage "${BIN}"
+            fi
+            rm -f "stage/${BIN}"
+          done
+          ls -lh release-assets/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: headless
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [verify, build-desktop, build-headless]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: all-assets
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS.txt
+        run: |
+          cd all-assets
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          PRERELEASE_FLAG=""
+          if [[ "$TAG" == *-* ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" all-assets/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" all-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "TailChat ${TAG}" \
+              --generate-notes \
+              $PRERELEASE_FLAG
+          fi

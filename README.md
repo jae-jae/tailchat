@@ -84,11 +84,11 @@ Click **Pair** in the top-right corner of an existing device, then scan the QR c
 ./tailchat-headless -data-dir ~/.tailchat-headless -name "HomeNAS" -derp-host derp.example.com
 ```
 
-For Android / iOS builds, see [`mygo.config.ts`](mygo.config.ts) and [`ios/ShareExtension/README.md`](ios/ShareExtension/README.md):
+For Android / iOS builds, see [`mygo.json`](mygo.json) and [`ios/ShareExtension/README.md`](ios/ShareExtension/README.md):
 
 ```bash
-mygo build -platform android
-mygo build -platform ios
+go tool mygo build -platform android
+go tool mygo build -platform ios
 ```
 
 </details>

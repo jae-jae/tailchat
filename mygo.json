@@ -1,0 +1,38 @@
+{
+  "name": "TailChat",
+  "slug": "tailchat",
+  "identifier": "dev.tailchat.app",
+  "version": "1.0.0",
+  "license": "MIT",
+  "copyright": "© 2026 TailChat Contributors",
+  "icon": "assets/icon.png",
+  "main": "./cmd/tailchat",
+  "out": "dist",
+  "urlSchemes": ["tailchat"],
+  "macos": {
+    "icon": "assets/macos/AppIcon.icns",
+    "minimumSystemVersion": "13.0"
+  },
+  "windows": {
+    "displayName": "TailChat"
+  },
+  "linux": {
+    "comment": "Account-free, pure-Go native P2P file & text transfer powered by Tailcat",
+    "categories": ["Network", "Chat", "Utility"],
+    "maintainer": "TailChat Contributors <https://github.com/jae-jae/tailchat>",
+    "webview": false,
+    "command": "tailchat"
+  },
+  "ios": {
+    "minimumSystemVersion": "17.0",
+    "backgroundModes": ["fetch", "processing"]
+  },
+  "android": {
+    "minSdk": 26,
+    "permissions": [
+      "FOREGROUND_SERVICE",
+      "FOREGROUND_SERVICE_DATA_SYNC",
+      "POST_NOTIFICATIONS"
+    ]
+  }
+}

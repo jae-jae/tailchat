@@ -28,7 +28,7 @@ Because iOS enforces a strict ~120 MB memory limit on Share Extensions, this tar
    ```text
    ios/ShareExtension/build/ShareExtension.appex
    ```
-5. Uncomment the `ios.extensions` entry in `mygo.config.ts`:
+5. Add the `ios.extensions` entry in `mygo.json`:
    ```ts
    ios: {
      minimumSystemVersion: "17.0",

@@ -84,11 +84,11 @@ go test -race ./...
 ./tailchat-headless -data-dir ~/.tailchat-headless -name "HomeNAS" -derp-host derp.example.com
 ```
 
-移动端（Android / iOS）参考 [`mygo.config.ts`](mygo.config.ts) 与 [`ios/ShareExtension/README.md`](ios/ShareExtension/README.md)：
+移动端（Android / iOS）参考 [`mygo.json`](mygo.json) 与 [`ios/ShareExtension/README.md`](ios/ShareExtension/README.md)：
 
 ```bash
-mygo build -platform android
-mygo build -platform ios
+go tool mygo build -platform android
+go tool mygo build -platform ios
 ```
 
 </details>
