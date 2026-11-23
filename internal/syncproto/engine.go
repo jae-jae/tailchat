@@ -22,8 +22,10 @@ const (
 	msgBatchLimit                = 50
 	maxSyncMessagesOnce          = 2000
 	streamIOTimeout              = 15 * time.Second
+	chunkHeaderTimeout           = 15 * time.Second
 	chunkIOTimeout               = 45 * time.Second
 	chunkFetchMaxRounds          = 4
+	downloadMaxPasses            = 3
 	transferProgressEmitInterval = 80 * time.Millisecond
 )
 
@@ -1039,6 +1041,15 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 		task.UpdatedAt = time.Now().UnixMilli()
 	}
 
+	// Reclaim any already-verified chunks sitting on disk in CAS (e.g., after a prior
+	// interrupted or reset transfer) before fetching anything over the network.
+	if reclaimed := s.reclaimVerifiedCASChunks(blob, task, chunkSize); reclaimed > 0 {
+		task.BytesDone = computeBytesDone(task.ChunkBitmap, blob.ChunkCount, chunkSize, blob.FileSize)
+		task.UpdatedAt = time.Now().UnixMilli()
+		log.Printf("syncproto: reclaimed %d verified local chunks for file=%q blob=%s (%d/%d bytes)",
+			reclaimed, blob.FileName, shortHashForLog(blobHash), task.BytesDone, task.BytesTotal)
+	}
+
 	if err := s.store.UpsertTransferTask(*task); err != nil {
 		return err
 	}
@@ -1047,8 +1058,14 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 		s.emit(model.AppEvent{Type: model.EventTransferUpdated, Transfer: &tc})
 	}
 
-	missing := model.MissingChunks(task.ChunkBitmap, blob.ChunkCount)
-	if len(missing) > 0 {
+	var lastPassErr error
+	for pass := 0; pass < downloadMaxPasses; pass++ {
+		missing := model.MissingChunks(task.ChunkBitmap, blob.ChunkCount)
+		if len(missing) == 0 {
+			lastPassErr = nil
+			break
+		}
+
 		candidates := s.selectCandidatePeers(blob.Seeders)
 		if len(candidates) == 0 {
 			log.Printf("syncproto: download queued (no online peers) file=%q blob=%s size=%d", blob.FileName, shortHashForLog(blobHash), blob.FileSize)
@@ -1061,8 +1078,8 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 			return errors.New("no online peers available for download")
 		}
 
-		log.Printf("syncproto: download start file=%q blob=%s size=%d missing=%d/%d peers=%d",
-			blob.FileName, shortHashForLog(blobHash), blob.FileSize, len(missing), blob.ChunkCount, len(candidates))
+		log.Printf("syncproto: download pass %d/%d start file=%q blob=%s size=%d missing=%d/%d peers=%d",
+			pass+1, downloadMaxPasses, blob.FileName, shortHashForLog(blobHash), blob.FileSize, len(missing), blob.ChunkCount, len(candidates))
 
 		workers := s.opts.DownloadWorkers
 		if workers > len(missing) {
@@ -1078,6 +1095,7 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 		var (
 			taskMu           sync.Mutex
 			lastProgressEmit time.Time
+			passSucceeded    int
 			errMu            sync.Mutex
 			firstErr         error
 			wg               sync.WaitGroup
@@ -1128,6 +1146,7 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 					taskMu.Lock()
 					task.ChunkBitmap = model.SetChunk(task.ChunkBitmap, idx)
 					task.BytesDone = computeBytesDone(task.ChunkBitmap, blob.ChunkCount, chunkSize, blob.FileSize)
+					passSucceeded++
 					now := time.Now()
 					task.UpdatedAt = now.UnixMilli()
 					_ = s.store.UpsertTransferTask(*task)
@@ -1149,7 +1168,7 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 		}
 		wg.Wait()
 
-		// Handle pause/cancel/context termination before attempting assembly.
+		// Handle pause/cancel/context termination before attempting another pass or assembly.
 		switch at.getAction() {
 		case stopPause:
 			task.State = model.TransferPaused
@@ -1177,21 +1196,33 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 			return dlCtx.Err()
 		}
 
-		if firstErr != nil || len(model.MissingChunks(task.ChunkBitmap, blob.ChunkCount)) > 0 {
-			if firstErr == nil {
-				firstErr = errors.New("incomplete chunk download")
-			}
-			rem := len(model.MissingChunks(task.ChunkBitmap, blob.ChunkCount))
-			log.Printf("syncproto: download failed file=%q blob=%s done=%d/%d remaining_chunks=%d err=%v",
-				blob.FileName, shortHashForLog(blobHash), task.BytesDone, task.BytesTotal, rem, firstErr)
-			task.State = model.TransferFailed
-			task.LastError = firstErr.Error()
-			task.UpdatedAt = time.Now().UnixMilli()
-			_ = s.store.UpsertTransferTask(*task)
-			tc := cloneTransferTask(*task)
-			s.emit(model.AppEvent{Type: model.EventTransferUpdated, Transfer: &tc})
-			return firstErr
+		remaining := model.MissingChunks(task.ChunkBitmap, blob.ChunkCount)
+		if len(remaining) == 0 {
+			lastPassErr = nil
+			break
 		}
+		lastPassErr = firstErr
+		if passSucceeded > 0 && pass+1 < downloadMaxPasses {
+			log.Printf("syncproto: download pass %d/%d made progress (%d chunks), retrying %d remaining chunks for file=%q blob=%s",
+				pass+1, downloadMaxPasses, passSucceeded, len(remaining), blob.FileName, shortHashForLog(blobHash))
+			continue
+		}
+		break
+	}
+
+	if remaining := model.MissingChunks(task.ChunkBitmap, blob.ChunkCount); len(remaining) > 0 {
+		if lastPassErr == nil {
+			lastPassErr = errors.New("incomplete chunk download")
+		}
+		log.Printf("syncproto: download failed file=%q blob=%s done=%d/%d remaining_chunks=%d err=%v",
+			blob.FileName, shortHashForLog(blobHash), task.BytesDone, task.BytesTotal, len(remaining), lastPassErr)
+		task.State = model.TransferFailed
+		task.LastError = lastPassErr.Error()
+		task.UpdatedAt = time.Now().UnixMilli()
+		_ = s.store.UpsertTransferTask(*task)
+		tc := cloneTransferTask(*task)
+		s.emit(model.AppEvent{Type: model.EventTransferUpdated, Transfer: &tc})
+		return lastPassErr
 	}
 
 	// All chunks verified on disk; assemble into DownloadDir.
@@ -1212,6 +1243,41 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 	log.Printf("syncproto: download complete file=%q blob=%s size=%d elapsed=%s path=%q",
 		blob.FileName, shortHashForLog(blobHash), blob.FileSize, time.Since(startedAt).Round(time.Millisecond), localPath)
 	return s.markBlobComplete(ctx, blob, localPath)
+}
+
+func (s *Service) reclaimVerifiedCASChunks(blob *model.FileBlob, task *model.TransferTask, chunkSize int) int {
+	if blob == nil || task == nil || blob.ChunkCount <= 0 {
+		return 0
+	}
+	missing := model.MissingChunks(task.ChunkBitmap, blob.ChunkCount)
+	if len(missing) == 0 {
+		return 0
+	}
+	reclaimed := 0
+	for _, idx := range missing {
+		data, err := s.cas.ReadChunk(blob.BlobHash, idx)
+		if err != nil {
+			continue
+		}
+		expectedLen := int64(chunkSize)
+		if idx == blob.ChunkCount-1 {
+			rem := blob.FileSize - int64(idx)*int64(chunkSize)
+			if rem >= 0 {
+				expectedLen = rem
+			}
+		}
+		if int64(len(data)) != expectedLen {
+			continue
+		}
+		if idx >= 0 && idx < len(blob.ChunkHashes) && blob.ChunkHashes[idx] != "" {
+			if model.Blake3Hex(data) != blob.ChunkHashes[idx] {
+				continue
+			}
+		}
+		task.ChunkBitmap = model.SetChunk(task.ChunkBitmap, idx)
+		reclaimed++
+	}
+	return reclaimed
 }
 
 func (s *Service) markBlobComplete(ctx context.Context, blob *model.FileBlob, localPath string) error {
@@ -1249,6 +1315,27 @@ func (s *Service) markBlobComplete(ctx context.Context, blob *model.FileBlob, lo
 	return nil
 }
 
+type sessionResettable interface {
+	ResetSession()
+}
+
+func resetStreamSession(stream io.ReadWriteCloser) {
+	if sr, ok := stream.(sessionResettable); ok {
+		sr.ResetSession()
+	}
+}
+
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
 func (s *Service) fetchChunkFromPeers(ctx context.Context, blobHash string, index int, candidates []string) ([]byte, error) {
 	if len(candidates) == 0 {
 		return nil, errors.New("no candidate peers")
@@ -1274,7 +1361,7 @@ func (s *Service) fetchChunkFromPeers(ctx context.Context, blobHash string, inde
 			}
 			peerID := candidates[(start+attempt)%len(candidates)]
 
-			reqCtx, cancel := context.WithTimeout(ctx, chunkIOTimeout)
+			reqCtx, cancel := context.WithTimeout(ctx, chunkHeaderTimeout+chunkIOTimeout)
 			stream, err := s.tr.OpenStream(reqCtx, peerID, model.StreamKindChunkData)
 			if err != nil {
 				cancel()
@@ -1290,9 +1377,16 @@ func (s *Service) fetchChunkFromPeers(ctx context.Context, blobHash string, inde
 				Index:    index,
 			})
 			if err != nil {
+				timedOut := reqCtx.Err() != nil && ctx.Err() == nil
 				stop()
 				_ = stream.Close()
 				cancel()
+				if ctx.Err() == nil {
+					resetStreamSession(stream)
+				}
+				if timedOut {
+					err = fmt.Errorf("chunk request timed out: %w", reqCtx.Err())
+				}
 				lastErr = err
 				log.Printf("syncproto: chunk request write failed blob=%s idx=%d round=%d/%d peer=%s err=%v",
 					shortHashForLog(blobHash), index, round+1, chunkFetchMaxRounds, shortHashForLog(peerID), err)
@@ -1300,12 +1394,19 @@ func (s *Service) fetchChunkFromPeers(ctx context.Context, blobHash string, inde
 			}
 
 			var resp ChunkResponse
-			err = ReadFrame(stream, &resp)
+			err = ReadFrameWithTimeouts(stream, &resp, chunkHeaderTimeout, chunkIOTimeout)
+			timedOut := (reqCtx.Err() != nil && ctx.Err() == nil) || isTimeoutError(err)
 			stop()
 			_ = stream.Close()
 			cancel()
 
 			if err != nil {
+				if ctx.Err() == nil && (timedOut || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) {
+					resetStreamSession(stream)
+				}
+				if timedOut && !isTimeoutError(err) {
+					err = fmt.Errorf("chunk response timed out: %w", reqCtx.Err())
+				}
 				lastErr = err
 				log.Printf("syncproto: chunk read failed blob=%s idx=%d round=%d/%d peer=%s err=%v",
 					shortHashForLog(blobHash), index, round+1, chunkFetchMaxRounds, shortHashForLog(peerID), err)

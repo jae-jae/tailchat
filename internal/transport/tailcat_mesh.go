@@ -644,7 +644,7 @@ func (m *TailcatMesh) OpenStream(ctx context.Context, peerDeviceID string, kind 
 	if sess := m.pickActiveSession(ps); sess != nil {
 		stream, err := openTypedStream(ctx, sess, kind)
 		if err == nil {
-			return stream, nil
+			return &trackedStream{Stream: stream, mesh: m, ps: ps, sess: sess}, nil
 		}
 		if ctx.Err() != nil {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -672,7 +672,7 @@ func (m *TailcatMesh) OpenStream(ctx context.Context, peerDeviceID string, kind 
 	if sess := m.pickActiveSession(ps); sess != nil {
 		stream, err := openTypedStream(ctx, sess, kind)
 		if err == nil {
-			return stream, nil
+			return &trackedStream{Stream: stream, mesh: m, ps: ps, sess: sess}, nil
 		}
 		if ctx.Err() != nil {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -688,13 +688,38 @@ func (m *TailcatMesh) OpenStream(ctx context.Context, peerDeviceID string, kind 
 		return nil, err
 	}
 	stream, err := openTypedStream(ctx, sess, kind)
-	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		m.clearClosedSession(ps, sess)
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			m.clearClosedSession(ps, sess)
+		}
+		return nil, err
 	}
-	return stream, err
+	return &trackedStream{Stream: stream, mesh: m, ps: ps, sess: sess}, nil
 }
 
-func openTypedStream(ctx context.Context, sess *yamux.Session, kind model.StreamKind) (io.ReadWriteCloser, error) {
+// trackedStream wraps a yamux stream with a reference to the exact yamux.Session
+// that created it so higher layers can evict a stalled/zombie session without
+// accidentally closing a newer healthy replacement session.
+type trackedStream struct {
+	*yamux.Stream
+	mesh *TailcatMesh
+	ps   *peerState
+	sess *yamux.Session
+}
+
+// ResetSession evicts the exact yamux session backing this stream if it is still
+// registered on the peer, forcing subsequent OpenStream calls to fail over to a
+// healthy alternate session or redial immediately.
+func (ts *trackedStream) ResetSession() {
+	if ts == nil || ts.mesh == nil || ts.ps == nil || ts.sess == nil {
+		return
+	}
+	if ts.mesh.clearClosedSession(ts.ps, ts.sess) {
+		log.Printf("tailcat: evicted stalled yamux session for peer %s", shortIDForLog(ts.ps.deviceID))
+	}
+}
+
+func openTypedStream(ctx context.Context, sess *yamux.Session, kind model.StreamKind) (*yamux.Stream, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -767,8 +792,9 @@ func (m *TailcatMesh) pickActiveSession(ps *peerState) *yamux.Session {
 	return nil
 }
 
-func (m *TailcatMesh) clearClosedSession(ps *peerState, sess *yamux.Session) {
+func (m *TailcatMesh) clearClosedSession(ps *peerState, sess *yamux.Session) bool {
 	var oldClient *tailcat.Client
+	evicted := false
 	ps.mu.Lock()
 	if ps.outSession == sess {
 		ps.outSession = nil
@@ -776,16 +802,21 @@ func (m *TailcatMesh) clearClosedSession(ps *peerState, sess *yamux.Session) {
 		ps.outClient = nil
 		ps.outAddr = ""
 		ps.outDERPURL = ""
+		evicted = true
 	}
 	if ps.inSession == sess {
 		ps.inSession = nil
+		evicted = true
 	}
 	ps.mu.Unlock()
 
-	_ = sess.Close()
-	if oldClient != nil {
-		drainAndCloseClient(oldClient, defaultDrainTimeout)
+	if evicted {
+		_ = sess.Close()
+		if oldClient != nil {
+			drainAndCloseClient(oldClient, defaultDrainTimeout)
+		}
 	}
+	return evicted
 }
 
 func (m *TailcatMesh) ensureOutboundLocked(ctx context.Context, ps *peerState) (*yamux.Session, error) {

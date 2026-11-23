@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"tailchat/internal/model"
 )
@@ -143,6 +144,46 @@ func ReadFrame(r io.Reader, dst any) error {
 	buf := make([]byte, n)
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return err
+	}
+	if err := json.Unmarshal(buf, dst); err != nil {
+		return fmt.Errorf("unmarshal frame: %w", err)
+	}
+	return nil
+}
+
+type readDeadlineSetter interface {
+	SetReadDeadline(time.Time) error
+}
+
+// ReadFrameWithTimeouts reads a length-prefixed JSON frame while enforcing a fast
+// headerTimeout on the 4-byte length prefix (to detect stalled/zombie sessions quickly)
+// and a separate bodyTimeout for reading the payload once bytes start flowing.
+func ReadFrameWithTimeouts(r io.Reader, dst any, headerTimeout, bodyTimeout time.Duration) error {
+	ds, hasDeadline := r.(readDeadlineSetter)
+	if hasDeadline && headerTimeout > 0 {
+		_ = ds.SetReadDeadline(time.Now().Add(headerTimeout))
+	}
+	var hdr [4]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return err
+	}
+	n := binary.BigEndian.Uint32(hdr[:])
+	if n == 0 {
+		return errors.New("zero-length frame")
+	}
+	if n > MaxFrameSize {
+		return fmt.Errorf("frame size %d exceeds max %d", n, MaxFrameSize)
+	}
+
+	if hasDeadline && bodyTimeout > 0 {
+		_ = ds.SetReadDeadline(time.Now().Add(bodyTimeout))
+	}
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return err
+	}
+	if hasDeadline {
+		_ = ds.SetReadDeadline(time.Time{})
 	}
 	if err := json.Unmarshal(buf, dst); err != nil {
 		return fmt.Errorf("unmarshal frame: %w", err)

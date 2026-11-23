@@ -625,6 +625,8 @@ type memTransport struct {
 	pairHandler    model.PairingHandler
 	pairPort       uint16
 	failChunkOpens atomic.Int32
+	zombieSession  atomic.Bool
+	sessionResets  atomic.Int32
 }
 
 func newMemTransport(net *memNetwork) *memTransport {
@@ -759,6 +761,10 @@ func (t *memTransport) SyncPeers(peers []model.Device) {
 func (t *memTransport) OpenStream(ctx context.Context, peerDeviceID string, kind model.StreamKind) (io.ReadWriteCloser, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
+	}
+
+	if kind == model.StreamKindChunkData && t.zombieSession.Load() {
+		return &zombieTimeoutStream{tr: t}, nil
 	}
 
 	if kind == model.StreamKindChunkData && t.failChunkOpens.Add(-1) >= 0 {
@@ -1937,5 +1943,201 @@ func TestResendingFailedLargeFileClearsStaleErrorAndPreservesChunks(t *testing.T
 		t.Fatalf("resumed payload mismatch: err=%v len=%d want=%d", err, len(got), len(payload))
 	}
 }
+
+type testTimeoutErr struct{}
+
+func (testTimeoutErr) Error() string   { return "i/o timeout" }
+func (testTimeoutErr) Timeout() bool   { return true }
+func (testTimeoutErr) Temporary() bool { return true }
+
+// zombieTimeoutStream simulates a half-dead yamux stream where Write succeeds locally
+// in memory, Read hits the header timeout, and ResetSession() evicts the zombie session.
+type zombieTimeoutStream struct {
+	tr *memTransport
+}
+
+func (z *zombieTimeoutStream) Write(p []byte) (int, error)          { return len(p), nil }
+func (z *zombieTimeoutStream) Read(_ []byte) (int, error)           { return 0, testTimeoutErr{} }
+func (z *zombieTimeoutStream) Close() error                         { return nil }
+func (z *zombieTimeoutStream) SetReadDeadline(_ time.Time) error    { return nil }
+func (z *zombieTimeoutStream) ResetSession() {
+	if z.tr.zombieSession.Swap(false) {
+		z.tr.sessionResets.Add(1)
+	}
+}
+
+func TestDownloadEvictsZombieSessionAndRecoversImmediately(t *testing.T) {
+	net := newMemNetwork()
+	ctx := context.Background()
+
+	a := newRealStoreTestNode(t, net, "NodeA", 0)
+	b := newRealStoreTestNode(t, net, "NodeB", 0)
+
+	code, _, err := a.svc.CreatePairingCode(ctx, 60)
+	if err != nil {
+		t.Fatalf("A.CreatePairingCode: %v", err)
+	}
+	if err := b.svc.JoinWithPairingCode(ctx, code); err != nil {
+		t.Fatalf("B.JoinWithPairingCode: %v", err)
+	}
+	waitUntil(t, 3*time.Second, "A and B connected", func() bool {
+		return isPeerConnected(a.svc, b.svc.Identity().DeviceID) &&
+			isPeerConnected(b.svc, a.svc.Identity().DeviceID)
+	})
+
+	payload := make([]byte, 2*model.DefaultChunkSize+100*1024)
+	for i := range payload {
+		payload[i] = byte((i*29 + 5) & 0xff)
+	}
+	srcFile := filepath.Join(t.TempDir(), "zombie-recover.bin")
+	if err := os.WriteFile(srcFile, payload, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	fileMsg, err := a.svc.SendFile(ctx, srcFile)
+	if err != nil {
+		t.Fatalf("A.SendFile: %v", err)
+	}
+	waitUntil(t, 4*time.Second, "B receives metadata", func() bool {
+		msgs, _ := b.svc.ListMessages(10, "")
+		return len(msgs) == 1
+	})
+
+	// Simulate a half-dead yamux session on B; without ResetSession() this would fail every chunk.
+	b.tr.zombieSession.Store(true)
+
+	if err := b.svc.DownloadFile(ctx, fileMsg.BlobHash); err != nil {
+		t.Fatalf("B.DownloadFile should evict zombie session and recover, got: %v", err)
+	}
+	if got := b.tr.sessionResets.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 zombie session eviction, got %d", got)
+	}
+	blobAfter, err := b.store.GetFileBlob(fileMsg.BlobHash)
+	if err != nil || blobAfter == nil || blobAfter.LocalPath == "" {
+		t.Fatalf("expected completed LocalPath, blob=%+v err=%v", blobAfter, err)
+	}
+	got, err := os.ReadFile(blobAfter.LocalPath)
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("downloaded payload mismatch: err=%v len=%d want=%d", err, len(got), len(payload))
+	}
+}
+
+func TestDownloadMultiPassRecoversEarlierFailedChunks(t *testing.T) {
+	net := newMemNetwork()
+	ctx := context.Background()
+
+	a := newRealStoreTestNode(t, net, "NodeA", 0)
+	b := newRealStoreTestNode(t, net, "NodeB", 0)
+
+	code, _, err := a.svc.CreatePairingCode(ctx, 60)
+	if err != nil {
+		t.Fatalf("A.CreatePairingCode: %v", err)
+	}
+	if err := b.svc.JoinWithPairingCode(ctx, code); err != nil {
+		t.Fatalf("B.JoinWithPairingCode: %v", err)
+	}
+	waitUntil(t, 3*time.Second, "A and B connected", func() bool {
+		return isPeerConnected(a.svc, b.svc.Identity().DeviceID) &&
+			isPeerConnected(b.svc, a.svc.Identity().DeviceID)
+	})
+
+	// 4 chunks (3.2 MiB); with 2 workers and 5 forced failures, the first chunk exhausts
+	// all 4 single-chunk retry rounds in pass 1 while later chunks succeed in pass 1.
+	// Pass 2 must automatically catch up the earlier failed chunk instead of failing the download.
+	payload := make([]byte, 3*model.DefaultChunkSize+200*1024)
+	for i := range payload {
+		payload[i] = byte((i*19 + 3) & 0xff)
+	}
+	srcFile := filepath.Join(t.TempDir(), "multipass.bin")
+	if err := os.WriteFile(srcFile, payload, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	fileMsg, err := a.svc.SendFile(ctx, srcFile)
+	if err != nil {
+		t.Fatalf("A.SendFile: %v", err)
+	}
+	waitUntil(t, 4*time.Second, "B receives metadata", func() bool {
+		msgs, _ := b.svc.ListMessages(10, "")
+		return len(msgs) == 1
+	})
+
+	b.tr.failChunkOpens.Store(5)
+	if err := b.svc.DownloadFile(ctx, fileMsg.BlobHash); err != nil {
+		t.Fatalf("B.DownloadFile should recover earlier failed chunks in pass 2, got: %v", err)
+	}
+	blobAfter, err := b.store.GetFileBlob(fileMsg.BlobHash)
+	if err != nil || blobAfter == nil || blobAfter.LocalPath == "" {
+		t.Fatalf("expected completed LocalPath, blob=%+v err=%v", blobAfter, err)
+	}
+	got, err := os.ReadFile(blobAfter.LocalPath)
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("downloaded payload mismatch: err=%v len=%d want=%d", err, len(got), len(payload))
+	}
+}
+
+func TestDownloadReclaimsVerifiedLocalCASChunks(t *testing.T) {
+	net := newMemNetwork()
+	ctx := context.Background()
+
+	a := newRealStoreTestNode(t, net, "NodeA", 0)
+	b := newRealStoreTestNode(t, net, "NodeB", 0)
+
+	code, _, err := a.svc.CreatePairingCode(ctx, 60)
+	if err != nil {
+		t.Fatalf("A.CreatePairingCode: %v", err)
+	}
+	if err := b.svc.JoinWithPairingCode(ctx, code); err != nil {
+		t.Fatalf("B.JoinWithPairingCode: %v", err)
+	}
+	waitUntil(t, 3*time.Second, "A and B connected", func() bool {
+		return isPeerConnected(a.svc, b.svc.Identity().DeviceID) &&
+			isPeerConnected(b.svc, a.svc.Identity().DeviceID)
+	})
+
+	payload := make([]byte, 2*model.DefaultChunkSize+64*1024)
+	for i := range payload {
+		payload[i] = byte((i*41 + 11) & 0xff)
+	}
+	srcFile := filepath.Join(t.TempDir(), "reclaim.bin")
+	if err := os.WriteFile(srcFile, payload, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	fileMsg, err := a.svc.SendFile(ctx, srcFile)
+	if err != nil {
+		t.Fatalf("A.SendFile: %v", err)
+	}
+	waitUntil(t, 4*time.Second, "B receives metadata", func() bool {
+		msgs, _ := b.svc.ListMessages(10, "")
+		return len(msgs) == 1
+	})
+
+	// Pre-populate all chunks on B's disk while keeping B's transfer_tasks bitmap completely empty.
+	for i := 0; i < fileMsg.File.ChunkCount; i++ {
+		start := i * model.DefaultChunkSize
+		end := start + model.DefaultChunkSize
+		if end > len(payload) {
+			end = len(payload)
+		}
+		chunk := payload[start:end]
+		if err := b.cas.WriteChunk(fileMsg.BlobHash, i, model.Blake3Hex(chunk), chunk); err != nil {
+			t.Fatalf("WriteChunk(%d): %v", i, err)
+		}
+	}
+
+	// Even with sender offline (zero network fetches possible), B must reclaim all verified
+	// local chunks from CAS and assemble the file immediately.
+	a.tr.SetOffline(true)
+	if err := b.svc.DownloadFile(ctx, fileMsg.BlobHash); err != nil {
+		t.Fatalf("B.DownloadFile should reclaim all verified CAS chunks offline, got: %v", err)
+	}
+	blobAfter, err := b.store.GetFileBlob(fileMsg.BlobHash)
+	if err != nil || blobAfter == nil || blobAfter.LocalPath == "" {
+		t.Fatalf("expected assembled LocalPath, blob=%+v err=%v", blobAfter, err)
+	}
+	got, err := os.ReadFile(blobAfter.LocalPath)
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("assembled payload mismatch: err=%v len=%d want=%d", err, len(got), len(payload))
+	}
+}
+
 
 
