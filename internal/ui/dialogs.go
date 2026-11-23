@@ -779,14 +779,14 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 
 	mygoui.DialogBase(c.Key("modal-settings"), openPtr, func(backdrop, panel mygoui.Element) {
 		backdrop.Background(mygoui.RGBA(15, 23, 42, 0.32))
-		panel.Width(440).
-			Padding(18, 20).
+		panel.Width(480).
+			Padding(18, 18).
 			Radius(18).
 			Background(zenSurface).
 			Border(1, zenBorder).
 			Shadow(0, 20, 48, 0, mygoui.RGBA(15, 23, 42, 0.22))
 
-		mygoui.Column(c).Gap(12).FillWidth().Children(func() {
+		mygoui.Column(c).Gap(14).FillWidth().Children(func() {
 			// Modal header: Settings title + close button.
 			mygoui.Row(c).AlignItems(mygoui.Center).FillWidth().Children(func() {
 				mygoui.Text(c, t.SettingsTitle).FontSize(16).Bold().TextColor(zenInk)
@@ -796,26 +796,47 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 				}
 			})
 
-			// 2-tab segmented switcher: General · About.
+			// 4-tab segmented switcher: General · Transfer · Network · About.
 			mygoui.Segmented(c.Key("settings-tab"), &a.settingsTab,
 				t.TabGeneral,
+				t.TabTransfer,
+				t.TabNetwork,
 				t.TabAbout,
 			).Label(t.SettingsTitle).FillEqually()
 
-			if a.settingsTab == 0 {
+			switch a.settingsTab {
+			case 0:
 				a.renderSettingsGeneralTab(c, t)
-			} else {
+				a.renderSettingsSaveFooter(c, t)
+			case 1:
+				a.renderSettingsTransferTab(c, t)
+				a.renderSettingsSaveFooter(c, t)
+			case 2:
+				a.renderSettingsNetworkTab(c, t)
+				a.renderSettingsSaveFooter(c, t)
+			default:
 				a.renderSettingsAboutTab(c, snap, t)
 			}
 		})
 	})
 }
 
+func settingsSectionCard(c *mygoui.Context, body func()) {
+	mygoui.Column(c).
+		Padding(12, 12).
+		Gap(10).
+		Radius(13).
+		Background(zenSurfaceSubtle).
+		Border(1, zenBorder).
+		FillWidth().
+		Children(body)
+}
+
 func (a *App) renderSettingsGeneralTab(c *mygoui.Context, t uiStrings) {
-	mygoui.Scroll(c.Key("settings-general-scroll")).Height(460).FillWidth().Children(func() {
-		mygoui.Column(c).Gap(9).Padding(2, 6, 4, 2).FillWidth().Children(func() {
-			// 1. Device Name.
-			mygoui.Column(c).Gap(4).FillWidth().Children(func() {
+	mygoui.Column(c).Gap(10).FillWidth().Children(func() {
+		// Identity & Language card.
+		settingsSectionCard(c, func() {
+			mygoui.Column(c).Gap(5).FillWidth().Children(func() {
 				mygoui.Text(c, t.DeviceName).FontSize(12).FontWeight(600).TextColor(zenInk)
 				mygoui.TextInput(c.Key("set-device-name"), &a.settingsDraft.DeviceName).
 					Placeholder(t.MyDevicePlace).
@@ -823,8 +844,7 @@ func (a *App) renderSettingsGeneralTab(c *mygoui.Context, t uiStrings) {
 					FillWidth()
 			})
 
-			// 2. Language preference: Auto (fallback English), English, Chinese.
-			mygoui.Column(c).Gap(4).FillWidth().Children(func() {
+			mygoui.Column(c).Gap(5).FillWidth().Children(func() {
 				mygoui.Text(c, t.Language).FontSize(12).FontWeight(600).TextColor(zenInk)
 				mygoui.Segmented(c.Key("set-language"), &a.settingsDraft.LanguageIdx,
 					t.LanguageAuto,
@@ -832,9 +852,40 @@ func (a *App) renderSettingsGeneralTab(c *mygoui.Context, t uiStrings) {
 					t.LanguageChinese,
 				).Label(t.Language).FillEqually()
 			})
+		})
 
-			// 3. File Storage Path.
-			mygoui.Column(c).Gap(4).FillWidth().Children(func() {
+		// Window behavior card.
+		settingsSectionCard(c, func() {
+			mygoui.Checkbox(c.Key("set-min-tray"), &a.settingsDraft.MinimizeToTray, t.MinimizeToTray)
+		})
+
+		// Danger Zone: Clear All Chat History.
+		mygoui.Row(c).
+			Padding(11, 14).
+			Gap(10).
+			Radius(13).
+			Background(zenDangerSoft).
+			Border(1, mygoui.RGBA(239, 68, 68, 0.22)).
+			AlignItems(mygoui.Center).
+			FillWidth().
+			Children(func() {
+				mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+					mygoui.Text(c, t.ClearHistoryTitle).FontSize(12).Bold().TextColor(zenDangerDark)
+					mygoui.Text(c, t.ClearHistoryNote).FontSize(11).TextColor(zenInkSecondary).Wrap()
+				})
+
+				if zenDangerPillBtn(c, "btn-clear-history", t.ClearAllBtn).Clicked() {
+					a.clearConfirmOpen = true
+				}
+			})
+	})
+}
+
+func (a *App) renderSettingsTransferTab(c *mygoui.Context, t uiStrings) {
+	mygoui.Column(c).Gap(10).FillWidth().Children(func() {
+		// File Storage Path card.
+		settingsSectionCard(c, func() {
+			mygoui.Column(c).Gap(6).FillWidth().Children(func() {
 				mygoui.Text(c, t.DownloadDirLabel).FontSize(12).FontWeight(600).TextColor(zenInk)
 				mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
 					mygoui.TextInput(c.Key("set-download-dir"), &a.settingsDraft.DownloadDir).
@@ -845,81 +896,21 @@ func (a *App) renderSettingsGeneralTab(c *mygoui.Context, t uiStrings) {
 						a.triggerChooseDownloadDir()
 					}
 				})
+				mygoui.Text(c, t.DownloadDirHint).FontSize(11).TextColor(zenInkMuted).Wrap()
 			})
+		})
 
-			// 4. DERP Relay Server.
-			mygoui.Column(c).Gap(6).FillWidth().Children(func() {
-				mygoui.Text(c, t.DERPServer).FontSize(12).FontWeight(600).TextColor(zenInk)
-				mygoui.Segmented(c.Key("set-derp-mode"), &a.settingsDraft.DERPModeIdx,
-					t.DERPDefault,
-					t.DERPSelfHosted,
-					t.DERPCustomMap,
-				).Label(t.DERPModeLabel).FillEqually()
-
-				switch a.settingsDraft.DERPModeIdx {
-				case 0:
-					mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
-						mygoui.Text(c, t.PreferredRegionID).FontSize(12).TextColor(zenInkSecondary)
-						mygoui.TextInput(c.Key("set-region-id"), &a.settingsDraft.RegionIDStr).
-							Placeholder("304").
-							Label("Region ID").
-							Width(120)
-					})
-				case 1:
-					mygoui.Column(c).Gap(6).FillWidth().Children(func() {
-						mygoui.TextInput(c.Key("set-custom-host"), &a.settingsDraft.CustomHost).
-							Placeholder("derp.example.com").
-							Label(t.CustomDERPHost).
-							FillWidth()
-						mygoui.Row(c).Gap(6).FillWidth().Children(func() {
-							mygoui.TextInput(c.Key("set-derp-port"), &a.settingsDraft.CustomDERPPortStr).
-								Placeholder("443").
-								Label(t.DERPPort).
-								Grow(1)
-							mygoui.TextInput(c.Key("set-stun-port"), &a.settingsDraft.CustomSTUNPortStr).
-								Placeholder("3478").
-								Label(t.STUNPort).
-								Grow(1)
-							mygoui.TextInput(c.Key("set-region-name"), &a.settingsDraft.CustomRegionName).
-								Placeholder(t.CustomNodePlace).
-								Label(t.RegionName).
-								Grow(1)
-						})
-					})
-				case 2:
-					mygoui.TextInput(c.Key("set-derp-map-url"), &a.settingsDraft.DERPMapURL).
-						Placeholder("https://example.com/derpmap.json").
-						Label("DERPMap URL").
-						FillWidth()
-				}
-
-				mygoui.Row(c).Gap(8).Children(func() {
-					if zenPillBtn(c, "btn-hotswitch-derp", t.ApplyHotSwitchDERP, true, false).Clicked() {
-						cfg, err := a.settingsDraft.ToConfig()
-						if err != nil {
-							a.settingsErr = err.Error()
-						} else if err := a.state.ApplySettings(context.Background(), cfg, true); err != nil {
-							a.settingsErr = err.Error()
-						} else {
-							a.settingsErr = ""
-							a.settingsOpen = false
-						}
-					}
-				})
-			})
-
-			mygoui.Box(c).Height(1).FillWidth().Background(zenBorder)
-
-			// 5. Auto-download threshold & Download speed limit.
+		// Auto-download threshold & Download speed limit card.
+		settingsSectionCard(c, func() {
 			mygoui.Row(c).Gap(10).FillWidth().Children(func() {
-				mygoui.Column(c).Gap(4).Grow(1).Children(func() {
+				mygoui.Column(c).Gap(5).Grow(1).Children(func() {
 					mygoui.Text(c, t.AutoDownloadMB).FontSize(12).FontWeight(600).TextColor(zenInk)
 					mygoui.TextInput(c.Key("set-autodl-mb"), &a.settingsDraft.AutoDownloadMBStr).
 						Placeholder("20").
 						Label(t.AutoDownloadMB).
 						FillWidth()
 				})
-				mygoui.Column(c).Gap(4).Grow(1).Children(func() {
+				mygoui.Column(c).Gap(5).Grow(1).Children(func() {
 					mygoui.Text(c, t.DownloadLimitKBs).FontSize(12).FontWeight(600).TextColor(zenInk)
 					mygoui.TextInput(c.Key("set-rate-kbs"), &a.settingsDraft.RateLimitKBsStr).
 						Placeholder("0").
@@ -927,39 +918,86 @@ func (a *App) renderSettingsGeneralTab(c *mygoui.Context, t uiStrings) {
 						FillWidth()
 				})
 			})
-
-			// 6. Minimize to tray.
-			mygoui.Checkbox(c.Key("set-min-tray"), &a.settingsDraft.MinimizeToTray, t.MinimizeToTray)
-
-			mygoui.Box(c).Height(1).FillWidth().Background(zenBorder)
-
-			// 7. Danger Zone: Clear All Chat History.
-			mygoui.Row(c).
-				Padding(9, 12).
-				Gap(10).
-				Radius(12).
-				Background(zenDangerSoft).
-				Border(1, mygoui.RGBA(239, 68, 68, 0.22)).
-				AlignItems(mygoui.Center).
-				FillWidth().
-				Children(func() {
-					mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-						mygoui.Text(c, t.ClearHistoryTitle).FontSize(12).Bold().TextColor(zenDangerDark)
-						mygoui.Text(c, t.ClearHistoryNote).FontSize(11).TextColor(zenInkSecondary).Wrap()
-					})
-
-					if zenDangerPillBtn(c, "btn-clear-history", t.ClearAllBtn).Clicked() {
-						a.clearConfirmOpen = true
-					}
-				})
+			mygoui.Text(c, t.TransferPolicyHint).FontSize(11).TextColor(zenInkMuted).Wrap()
 		})
 	})
+}
 
+func (a *App) renderSettingsNetworkTab(c *mygoui.Context, t uiStrings) {
+	mygoui.Column(c).Gap(10).FillWidth().Children(func() {
+		settingsSectionCard(c, func() {
+			mygoui.Column(c).Gap(3).FillWidth().Children(func() {
+				mygoui.Text(c, t.DERPServer).FontSize(12.5).Bold().TextColor(zenInk)
+				mygoui.Text(c, t.DERPHint).FontSize(11).TextColor(zenInkMuted).Wrap()
+			})
+
+			mygoui.Segmented(c.Key("set-derp-mode"), &a.settingsDraft.DERPModeIdx,
+				t.DERPDefault,
+				t.DERPSelfHosted,
+				t.DERPCustomMap,
+			).Label(t.DERPModeLabel).FillEqually()
+
+			switch a.settingsDraft.DERPModeIdx {
+			case 0:
+				mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
+					mygoui.Text(c, t.PreferredRegionID).FontSize(12).TextColor(zenInkSecondary)
+					mygoui.TextInput(c.Key("set-region-id"), &a.settingsDraft.RegionIDStr).
+						Placeholder("304").
+						Label("Region ID").
+						Width(120)
+				})
+			case 1:
+				mygoui.Column(c).Gap(8).FillWidth().Children(func() {
+					mygoui.TextInput(c.Key("set-custom-host"), &a.settingsDraft.CustomHost).
+						Placeholder("derp.example.com").
+						Label(t.CustomDERPHost).
+						FillWidth()
+					mygoui.Row(c).Gap(6).FillWidth().Children(func() {
+						mygoui.TextInput(c.Key("set-derp-port"), &a.settingsDraft.CustomDERPPortStr).
+							Placeholder("443").
+							Label(t.DERPPort).
+							Grow(1)
+						mygoui.TextInput(c.Key("set-stun-port"), &a.settingsDraft.CustomSTUNPortStr).
+							Placeholder("3478").
+							Label(t.STUNPort).
+							Grow(1)
+						mygoui.TextInput(c.Key("set-region-name"), &a.settingsDraft.CustomRegionName).
+							Placeholder(t.CustomNodePlace).
+							Label(t.RegionName).
+							Grow(1)
+					})
+				})
+			case 2:
+				mygoui.TextInput(c.Key("set-derp-map-url"), &a.settingsDraft.DERPMapURL).
+					Placeholder("https://example.com/derpmap.json").
+					Label("DERPMap URL").
+					FillWidth()
+			}
+
+			mygoui.Row(c).Gap(8).Justify(mygoui.Start).FillWidth().Children(func() {
+				if zenPillBtn(c, "btn-hotswitch-derp", t.ApplyHotSwitchDERP, false, false).Clicked() {
+					cfg, err := a.settingsDraft.ToConfig()
+					if err != nil {
+						a.settingsErr = err.Error()
+					} else if err := a.state.ApplySettings(context.Background(), cfg, true); err != nil {
+						a.settingsErr = err.Error()
+					} else {
+						a.settingsErr = ""
+						a.settingsOpen = false
+					}
+				}
+			})
+		})
+	})
+}
+
+func (a *App) renderSettingsSaveFooter(c *mygoui.Context, t uiStrings) {
 	if a.settingsErr != "" {
 		mygoui.Text(c, a.settingsErr).FontSize(12).TextColor(zenDanger).Wrap()
 	}
 
-	// Footer actions on Tab 0.
+	mygoui.Box(c).Height(1).FillWidth().Background(zenBorder)
+
 	mygoui.Row(c).Gap(8).Justify(mygoui.End).FillWidth().Children(func() {
 		if zenPillBtn(c, "settings-close", t.Close, false, false).Clicked() {
 			a.settingsOpen = false

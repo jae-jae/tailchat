@@ -50,7 +50,7 @@ type App struct {
 
 	// Settings & About modal + Clear History confirmation state.
 	settingsOpen       bool
-	settingsTab        int // 0 = General, 1 = About
+	settingsTab        int // 0 = General, 1 = Transfer, 2 = Network, 3 = About
 	settingsDraft      SettingsDraft
 	settingsErr        string
 	clearConfirmOpen   bool

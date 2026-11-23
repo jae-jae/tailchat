@@ -222,6 +222,8 @@ type uiStrings struct {
 	// Settings modal
 	SettingsTitle      string
 	TabGeneral         string
+	TabTransfer        string
+	TabNetwork         string
 	TabAbout           string
 	CloseSettings      string
 	DeviceName         string
@@ -237,6 +239,7 @@ type uiStrings struct {
 	ChooseDirTitle     string
 	ChooseDirFailPref  string
 	DERPServer         string
+	DERPHint           string
 	DERPModeLabel      string
 	DERPDefault        string
 	DERPSelfHosted     string
@@ -250,6 +253,7 @@ type uiStrings struct {
 	ApplyHotSwitchDERP string
 	AutoDownloadMB     string
 	DownloadLimitKBs   string
+	TransferPolicyHint string
 	MinimizeToTray     string
 	ClearHistoryTitle  string
 	ClearHistoryNote   string
@@ -442,6 +446,8 @@ var stringsEN = uiStrings{
 
 	SettingsTitle:      "Settings",
 	TabGeneral:         "General",
+	TabTransfer:        "Transfer",
+	TabNetwork:         "Network",
 	TabAbout:           "About",
 	CloseSettings:      "Close settings",
 	DeviceName:         "Device Name",
@@ -457,6 +463,7 @@ var stringsEN = uiStrings{
 	ChooseDirTitle:     "Choose File Storage Folder",
 	ChooseDirFailPref:  "Failed to choose folder: ",
 	DERPServer:         "DERP Relay Server",
+	DERPHint:           "Encrypted traffic falls back to DERP relay when direct P2P is unavailable.",
 	DERPModeLabel:      "DERP Mode",
 	DERPDefault:        "Default tailcat",
 	DERPSelfHosted:     "Self-hosted",
@@ -470,6 +477,7 @@ var stringsEN = uiStrings{
 	ApplyHotSwitchDERP: "Apply & Hot-Switch DERP",
 	AutoDownloadMB:     "Auto-download (MB)",
 	DownloadLimitKBs:   "Speed limit (KB/s)",
+	TransferPolicyHint: "Files above the threshold wait for manual download; 0 = unlimited speed.",
 	MinimizeToTray:     "Minimize to tray when closing window",
 	ClearHistoryTitle:  "Clear All Chat History",
 	ClearHistoryNote:   "Clears chat history across all paired devices; local files stay intact",
@@ -657,6 +665,8 @@ var stringsZH = uiStrings{
 
 	SettingsTitle:      "设置",
 	TabGeneral:         "通用",
+	TabTransfer:        "传输",
+	TabNetwork:         "网络",
 	TabAbout:           "关于",
 	CloseSettings:      "关闭设置",
 	DeviceName:         "设备名称",
@@ -672,6 +682,7 @@ var stringsZH = uiStrings{
 	ChooseDirTitle:     "选择文件存储目录",
 	ChooseDirFailPref:  "选择目录失败：",
 	DERPServer:         "DERP 中继服务器",
+	DERPHint:           "P2P 直连受限时，加密流量将自动经由 DERP 中继转发。",
 	DERPModeLabel:      "DERP 模式",
 	DERPDefault:        "默认 tailcat",
 	DERPSelfHosted:     "自建 derper",
@@ -685,6 +696,7 @@ var stringsZH = uiStrings{
 	ApplyHotSwitchDERP: "应用并热切 DERP",
 	AutoDownloadMB:     "自动下载阈值 (MB)",
 	DownloadLimitKBs:   "下载限速 (KB/s)",
+	TransferPolicyHint: "超过阈值的文件需手动点击下载；限速填 0 表示不限速。",
 	MinimizeToTray:     "关闭窗口时最小化到托盘",
 	ClearHistoryTitle:  "清空所有聊天记录",
 	ClearHistoryNote:   "同步清空所有配对设备的聊天记录，本地文件不受影响",

@@ -626,13 +626,17 @@ func TestLightweightDevicesPopoverAndSettingsDERPSwitch(t *testing.T) {
 	}
 	tt.Frame()
 
-	// 2. Settings & DERP modal: switch to 自建 derper & hot-switch.
+	// 2. Settings & DERP modal: switch to Network tab, then 自建 derper & hot-switch.
 	if err := tt.Click("设置与 DERP"); err != nil {
 		t.Fatalf("click 设置与 DERP: %v", err)
 	}
 	tt.Frame()
+	if err := tt.Click("网络"); err != nil {
+		t.Fatalf("switch to 网络 tab: %v", err)
+	}
+	tt.Frame()
 	if !tt.HasText("DERP 中继服务器") {
-		t.Fatalf("expected Settings modal; texts: %v", tt.Texts())
+		t.Fatalf("expected Network tab in Settings modal; texts: %v", tt.Texts())
 	}
 	if err := tt.Click("自建 derper"); err != nil {
 		t.Fatalf("select 自建 derper: %v", err)
@@ -890,15 +894,29 @@ func TestRenderZenSnapshot2x(t *testing.T) {
 	// 9. Redesigned Settings modal: General tab (Tab 0).
 	_, stGen, appSetGen, _ := newTestApp(t)
 	appSetGen.settingsDraft = NewSettingsDraft(stGen.Config())
-	appSetGen.settingsDraft.DownloadDir = "/Users/demo/Downloads/TailChat"
 	appSetGen.settingsTab = 0
 	appSetGen.settingsOpen = true
 	assertValid2xRender(t, mygoui.Render(appSetGen.View, 540, 740, 2), outDir, "09_settings_general_tab.png")
 
-	// 10. Redesigned Settings modal: About tab (Tab 1).
+	// 9b. Redesigned Settings modal: Transfer tab (Tab 1).
+	_, stTrans, appSetTrans, _ := newTestApp(t)
+	appSetTrans.settingsDraft = NewSettingsDraft(stTrans.Config())
+	appSetTrans.settingsDraft.DownloadDir = "/Users/demo/Downloads/TailChat"
+	appSetTrans.settingsTab = 1
+	appSetTrans.settingsOpen = true
+	assertValid2xRender(t, mygoui.Render(appSetTrans.View, 540, 740, 2), outDir, "09b_settings_transfer_tab.png")
+
+	// 9c. Redesigned Settings modal: Network tab (Tab 2).
+	_, stNet, appSetNet, _ := newTestApp(t)
+	appSetNet.settingsDraft = NewSettingsDraft(stNet.Config())
+	appSetNet.settingsTab = 2
+	appSetNet.settingsOpen = true
+	assertValid2xRender(t, mygoui.Render(appSetNet.View, 540, 740, 2), outDir, "09c_settings_network_tab.png")
+
+	// 10. Redesigned Settings modal: About tab (Tab 3).
 	_, stAbout, appSetAbout, _ := newTestApp(t)
 	appSetAbout.settingsDraft = NewSettingsDraft(stAbout.Config())
-	appSetAbout.settingsTab = 1
+	appSetAbout.settingsTab = 3
 	appSetAbout.settingsOpen = true
 	assertValid2xRender(t, mygoui.Render(appSetAbout.View, 540, 740, 2), outDir, "10_settings_about_tab.png")
 
@@ -1166,8 +1184,13 @@ func TestSettingsDownloadDirAndBrowsePicker(t *testing.T) {
 	}
 	tt.Frame()
 
+	if err := tt.Click("传输"); err != nil {
+		t.Fatalf("switch to 传输 tab: %v", err)
+	}
+	tt.Frame()
+
 	if !tt.HasText("文件存储路径") || !tt.HasText("选择目录") {
-		t.Fatalf("expected File Storage Path controls in Settings General tab; texts: %v", tt.Texts())
+		t.Fatalf("expected File Storage Path controls in Settings Transfer tab; texts: %v", tt.Texts())
 	}
 
 	if err := tt.Click("选择目录"); err != nil {
@@ -1287,8 +1310,31 @@ func TestSettingsAboutTabVersionUpdatesAndGitHub(t *testing.T) {
 	}
 	tt.Frame()
 
-	if !tt.HasText("通用") || !tt.HasText("关于") {
-		t.Fatalf("expected General & About tabs in Settings; texts: %v", tt.Texts())
+	for _, tabLabel := range []string{"通用", "传输", "网络", "关于"} {
+		if !tt.HasText(tabLabel) {
+			t.Fatalf("expected %q tab in Settings; texts: %v", tabLabel, tt.Texts())
+		}
+	}
+
+	// Verify editing draft on General persists across Transfer & Network tab switches.
+	app.settingsDraft.DeviceName = "MyDraftDevice"
+	if err := tt.Click("传输"); err != nil {
+		t.Fatalf("switch to 传输 tab: %v", err)
+	}
+	tt.Frame()
+	if app.settingsTab != 1 || !tt.HasText("文件存储路径") || !tt.HasText("自动下载阈值 (MB)") {
+		t.Fatalf("expected Transfer tab (1) controls; tab=%d texts=%v", app.settingsTab, tt.Texts())
+	}
+
+	if err := tt.Click("网络"); err != nil {
+		t.Fatalf("switch to 网络 tab: %v", err)
+	}
+	tt.Frame()
+	if app.settingsTab != 2 || !tt.HasText("DERP 中继服务器") {
+		t.Fatalf("expected Network tab (2) controls; tab=%d texts=%v", app.settingsTab, tt.Texts())
+	}
+	if app.settingsDraft.DeviceName != "MyDraftDevice" {
+		t.Fatalf("expected settingsDraft preserved across tab switches, got %q", app.settingsDraft.DeviceName)
 	}
 
 	if err := tt.Click("关于"); err != nil {
@@ -1296,8 +1342,8 @@ func TestSettingsAboutTabVersionUpdatesAndGitHub(t *testing.T) {
 	}
 	tt.Frame()
 
-	if app.settingsTab != 1 {
-		t.Fatalf("expected settingsTab == 1, got %d", app.settingsTab)
+	if app.settingsTab != 3 {
+		t.Fatalf("expected settingsTab == 3, got %d", app.settingsTab)
 	}
 	for _, want := range []string{"TailChat", "v1.0.0", "软件更新", "检查更新", "GitHub", "github.com/jae-jae/tailchat"} {
 		if !tt.HasText(want) {
