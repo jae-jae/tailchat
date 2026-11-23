@@ -23,7 +23,7 @@ const (
 	maxSyncMessagesOnce          = 2000
 	streamIOTimeout              = 15 * time.Second
 	chunkIOTimeout               = 45 * time.Second
-	chunkFetchMaxRounds          = 3
+	chunkFetchMaxRounds          = 4
 	transferProgressEmitInterval = 80 * time.Millisecond
 )
 
@@ -855,7 +855,39 @@ func (s *Service) ingestRemoteMessages(msgs []model.Message, fromPeerID string) 
 			s.goBackground(func(ctx context.Context) {
 				_ = s.DownloadFile(ctx, hash)
 			})
+		} else if msg.Kind == model.MessageKindFile && msg.File != nil && msg.File.LocalPath == "" {
+			// When a peer re-sends a large file (> auto-download threshold) whose previous
+			// attempt failed, clear the stale red error while keeping already-downloaded chunks
+			// intact so the new card looks ready to resume/download rather than failing instantly.
+			s.resetStaleFailedTransfer(msg.File.BlobHash)
 		}
+	}
+}
+
+func (s *Service) resetStaleFailedTransfer(blobHash string) {
+	if blobHash == "" {
+		return
+	}
+	s.transfersMu.Lock()
+	_, active := s.activeTransfers[blobHash]
+	s.transfersMu.Unlock()
+	if active {
+		return
+	}
+	task, err := s.store.GetTransferTask(blobHash)
+	if err != nil || task == nil || task.State != model.TransferFailed {
+		return
+	}
+	task.LastError = ""
+	task.UpdatedAt = time.Now().UnixMilli()
+	if task.BytesDone > 0 {
+		task.State = model.TransferPaused
+	} else {
+		task.State = model.TransferCancelled
+	}
+	if err := s.store.UpsertTransferTask(*task); err == nil {
+		tc := cloneTransferTask(*task)
+		s.emit(model.AppEvent{Type: model.EventTransferUpdated, Transfer: &tc})
 	}
 }
 
@@ -890,18 +922,28 @@ func (s *Service) handleChunkStream(ctx context.Context, peerDeviceID string, st
 		}
 		data, err := s.cas.ReadChunk(req.BlobHash, req.Index)
 		if err != nil {
+			log.Printf("syncproto: serve chunk read failed blob=%s idx=%d peer=%s: %v", shortHashForLog(req.BlobHash), req.Index, shortHashForLog(peerDeviceID), err)
 			resp.Error = err.Error()
 		} else {
 			resp.Data = data
 			resp.Hash = model.Blake3Hex(data)
 		}
 		if err := WriteFrame(stream, resp); err != nil {
+			log.Printf("syncproto: serve chunk write failed blob=%s idx=%d peer=%s: %v", shortHashForLog(req.BlobHash), req.Index, shortHashForLog(peerDeviceID), err)
 			return
 		}
 	}
 }
 
+func shortHashForLog(v string) string {
+	if len(v) <= 16 {
+		return v
+	}
+	return v[:16] + "…"
+}
+
 func (s *Service) runDownload(ctx context.Context, blobHash string) error {
+	startedAt := time.Now()
 	blob, err := s.store.GetFileBlob(blobHash)
 	if err != nil {
 		return err
@@ -1009,6 +1051,7 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 	if len(missing) > 0 {
 		candidates := s.selectCandidatePeers(blob.Seeders)
 		if len(candidates) == 0 {
+			log.Printf("syncproto: download queued (no online peers) file=%q blob=%s size=%d", blob.FileName, shortHashForLog(blobHash), blob.FileSize)
 			task.State = model.TransferQueued
 			task.LastError = "waiting for online seeder peers"
 			task.UpdatedAt = time.Now().UnixMilli()
@@ -1017,6 +1060,9 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 			s.emit(model.AppEvent{Type: model.EventTransferUpdated, Transfer: &tc})
 			return errors.New("no online peers available for download")
 		}
+
+		log.Printf("syncproto: download start file=%q blob=%s size=%d missing=%d/%d peers=%d",
+			blob.FileName, shortHashForLog(blobHash), blob.FileSize, len(missing), blob.ChunkCount, len(candidates))
 
 		workers := s.opts.DownloadWorkers
 		if workers > len(missing) {
@@ -1135,6 +1181,9 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 			if firstErr == nil {
 				firstErr = errors.New("incomplete chunk download")
 			}
+			rem := len(model.MissingChunks(task.ChunkBitmap, blob.ChunkCount))
+			log.Printf("syncproto: download failed file=%q blob=%s done=%d/%d remaining_chunks=%d err=%v",
+				blob.FileName, shortHashForLog(blobHash), task.BytesDone, task.BytesTotal, rem, firstErr)
 			task.State = model.TransferFailed
 			task.LastError = firstErr.Error()
 			task.UpdatedAt = time.Now().UnixMilli()
@@ -1150,6 +1199,7 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 	_ = os.MkdirAll(downloadDir, 0o755)
 	localPath, err := s.cas.AssembleFile(*blob, downloadDir)
 	if err != nil {
+		log.Printf("syncproto: assemble failed file=%q blob=%s err=%v", blob.FileName, shortHashForLog(blobHash), err)
 		task.State = model.TransferFailed
 		task.LastError = err.Error()
 		task.UpdatedAt = time.Now().UnixMilli()
@@ -1159,6 +1209,8 @@ func (s *Service) runDownload(ctx context.Context, blobHash string) error {
 		return fmt.Errorf("assemble file: %w", err)
 	}
 
+	log.Printf("syncproto: download complete file=%q blob=%s size=%d elapsed=%s path=%q",
+		blob.FileName, shortHashForLog(blobHash), blob.FileSize, time.Since(startedAt).Round(time.Millisecond), localPath)
 	return s.markBlobComplete(ctx, blob, localPath)
 }
 
@@ -1206,7 +1258,7 @@ func (s *Service) fetchChunkFromPeers(ctx context.Context, blobHash string, inde
 
 	for round := 0; round < chunkFetchMaxRounds; round++ {
 		if round > 0 {
-			backoff := time.Duration(round) * 200 * time.Millisecond
+			backoff := time.Duration(round) * 300 * time.Millisecond
 			timer := time.NewTimer(backoff)
 			select {
 			case <-ctx.Done():
@@ -1227,6 +1279,8 @@ func (s *Service) fetchChunkFromPeers(ctx context.Context, blobHash string, inde
 			if err != nil {
 				cancel()
 				lastErr = err
+				log.Printf("syncproto: chunk open failed blob=%s idx=%d round=%d/%d peer=%s err=%v",
+					shortHashForLog(blobHash), index, round+1, chunkFetchMaxRounds, shortHashForLog(peerID), err)
 				continue
 			}
 			stop := context.AfterFunc(reqCtx, func() { _ = stream.Close() })
@@ -1240,6 +1294,8 @@ func (s *Service) fetchChunkFromPeers(ctx context.Context, blobHash string, inde
 				_ = stream.Close()
 				cancel()
 				lastErr = err
+				log.Printf("syncproto: chunk request write failed blob=%s idx=%d round=%d/%d peer=%s err=%v",
+					shortHashForLog(blobHash), index, round+1, chunkFetchMaxRounds, shortHashForLog(peerID), err)
 				continue
 			}
 
@@ -1251,10 +1307,14 @@ func (s *Service) fetchChunkFromPeers(ctx context.Context, blobHash string, inde
 
 			if err != nil {
 				lastErr = err
+				log.Printf("syncproto: chunk read failed blob=%s idx=%d round=%d/%d peer=%s err=%v",
+					shortHashForLog(blobHash), index, round+1, chunkFetchMaxRounds, shortHashForLog(peerID), err)
 				continue
 			}
 			if resp.Error != "" {
 				lastErr = errors.New(resp.Error)
+				log.Printf("syncproto: chunk remote error blob=%s idx=%d round=%d/%d peer=%s err=%s",
+					shortHashForLog(blobHash), index, round+1, chunkFetchMaxRounds, shortHashForLog(peerID), resp.Error)
 				continue
 			}
 			if resp.BlobHash != blobHash || resp.Index != index {

@@ -160,6 +160,7 @@ type uiStrings struct {
 	Cancel               string
 	Resume               string
 	DownloadNow          string
+	RetryDownload        string
 	OpenFileFailedPref   string
 	ShowInFolderFailPref string
 
@@ -388,6 +389,7 @@ var stringsEN = uiStrings{
 	Cancel:               "Cancel",
 	Resume:               "Resume",
 	DownloadNow:          "Download",
+	RetryDownload:        "Retry",
 	OpenFileFailedPref:   "Failed to open file: ",
 	ShowInFolderFailPref: "Failed to reveal file: ",
 
@@ -607,6 +609,7 @@ var stringsZH = uiStrings{
 	Cancel:               "取消",
 	Resume:               "继续",
 	DownloadNow:          "立即下载",
+	RetryDownload:        "重试下载",
 	OpenFileFailedPref:   "无法打开文件：",
 	ShowInFolderFailPref: "无法打开所在目录：",
 

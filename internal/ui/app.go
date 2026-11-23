@@ -1037,6 +1037,10 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 						if zenPillBtn(c, "cancel-"+msg.MsgID, t.Cancel, false, false).Clicked() {
 							a.cancelTransfer(blobHash)
 						}
+					case hasTask && task.State == model.TransferFailed:
+						if zenPillBtn(c, "retry-"+msg.MsgID, t.RetryDownload, true, false).Clicked() {
+							a.startDownload(blobHash, fileSize)
+						}
 					default:
 						if zenPillBtn(c, "dl-"+msg.MsgID, t.DownloadNow, true, false).Clicked() {
 							a.startDownload(blobHash, fileSize)

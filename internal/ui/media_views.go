@@ -586,6 +586,10 @@ func (a *App) renderRemoteMediaCard(c *mygoui.Context, snap ViewSnapshot, msg mo
 					if zenPillBtn(c, "cancel-m-"+msg.MsgID, t.Cancel, false, false).Clicked() {
 						a.cancelTransfer(blobHash)
 					}
+				case hasTask && task.State == model.TransferFailed:
+					if zenPillBtn(c, "retry-m-"+msg.MsgID, t.RetryDownload, true, false).Clicked() {
+						a.startDownload(blobHash, fileSize)
+					}
 				default:
 					if zenPillBtn(c, "dl-m-"+msg.MsgID, downloadCTA, true, false).Clicked() {
 						a.startDownload(blobHash, fileSize)

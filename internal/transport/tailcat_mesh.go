@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"sort"
 	"strings"
@@ -137,8 +138,9 @@ func (m *TailcatMesh) logf(format string, args ...any) {
 func newYamuxConfig() *yamux.Config {
 	cfg := yamux.DefaultConfig()
 	cfg.EnableKeepAlive = true
-	cfg.KeepAliveInterval = 20 * time.Second
-	cfg.ConnectionWriteTimeout = 15 * time.Second
+	cfg.KeepAliveInterval = 25 * time.Second
+	cfg.ConnectionWriteTimeout = 60 * time.Second
+	cfg.MaxStreamWindowSize = 1024 * 1024
 	cfg.LogOutput = io.Discard
 	return cfg
 }
@@ -852,6 +854,9 @@ func (m *TailcatMesh) ensureOutboundLocked(ctx context.Context, ps *peerState) (
 
 	conn, err := client.DialTCPPort(ctx, m.opts.MeshPort)
 	if err != nil {
+		if ctx.Err() == nil {
+			log.Printf("tailcat: dial peer %s failed: %v", shortIDForLog(ps.deviceID), err)
+		}
 		_ = client.Close()
 		m.updatePeerStatus(ps, model.PeerConnStatus{
 			DeviceID:  ps.deviceID,
@@ -1067,6 +1072,13 @@ func (m *TailcatMesh) serveYamuxSession(ctx context.Context, ps *peerState, sess
 	for {
 		stream, err := sess.AcceptStream()
 		if err != nil {
+			if ctx.Err() == nil && !errors.Is(err, yamux.ErrSessionShutdown) {
+				dir := "inbound"
+				if isOutbound {
+					dir = "outbound"
+				}
+				log.Printf("tailcat: %s yamux session closed for peer %s: %v", dir, shortIDForLog(ps.deviceID), err)
+			}
 			return
 		}
 		st := stream
@@ -1075,6 +1087,13 @@ func (m *TailcatMesh) serveYamuxSession(ctx context.Context, ps *peerState, sess
 			return
 		}
 	}
+}
+
+func shortIDForLog(id string) string {
+	if len(id) <= 18 {
+		return id
+	}
+	return id[:18] + "…"
 }
 
 func (m *TailcatMesh) goSpawn(fn func()) bool {

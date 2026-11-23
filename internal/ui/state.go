@@ -742,6 +742,7 @@ func (s *State) MarkTransferStarting(blobHash string, totalBytes int64) {
 // DownloadFile starts or resumes downloading a content-addressed file blob.
 func (s *State) DownloadFile(ctx context.Context, blobHash string) error {
 	if err := s.api.DownloadFile(ctx, blobHash); err != nil {
+		log.Printf("ui: DownloadFile(%s) failed: %v", blobHash, err)
 		if t, getErr := s.api.GetTransfer(blobHash); getErr == nil && t != nil {
 			s.mu.Lock()
 			s.transfers[blobHash] = *t

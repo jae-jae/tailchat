@@ -1657,5 +1657,30 @@ func TestSettingsDERPHotSwitchAndPairingDoNotBlockUIThread(t *testing.T) {
 	t.Fatalf("expected settings modal to close after UpdateDERP completed; open=%v saving=%v", app.settingsOpen, app.settingsSaving)
 }
 
+func TestFailedFileCardShowsRetryDownloadButton(t *testing.T) {
+	api := newMockAppAPI()
+	api.transfers["blake3-abc123"] = model.TransferTask{
+		BlobHash:   "blake3-abc123",
+		Direction:  model.TransferDownload,
+		State:      model.TransferFailed,
+		BytesDone:  1024 * 1024,
+		BytesTotal: 4 * 1024 * 1024,
+		LastError:  "unexpected EOF",
+	}
+	state := NewState(api)
+	state.Start(context.Background())
+	t.Cleanup(state.Stop)
+
+	app := NewApp(state)
+	app.runAsync = func(fn func()) { fn() }
+	tt := mygoui.NewTester(app.View, 540, 740)
+	tt.Frame()
+
+	if !tt.HasText("重试下载") {
+		t.Fatalf("expected failed file card to render 重试下载 CTA; texts: %v", tt.Texts())
+	}
+}
+
+
 
 

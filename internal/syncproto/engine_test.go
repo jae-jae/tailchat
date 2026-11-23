@@ -1845,3 +1845,97 @@ func TestDownloadRetriesTransientChunkEOF(t *testing.T) {
 	}
 }
 
+func TestResendingFailedLargeFileClearsStaleErrorAndPreservesChunks(t *testing.T) {
+	net := newMemNetwork()
+	ctx := context.Background()
+
+	// NodeB has a 1 MiB auto-download limit; file is ~2.2 MiB (> threshold).
+	a := newRealStoreTestNode(t, net, "NodeA", 1024*1024)
+	b := newRealStoreTestNode(t, net, "NodeB", 1024*1024)
+
+	code, _, err := a.svc.CreatePairingCode(ctx, 60)
+	if err != nil {
+		t.Fatalf("A.CreatePairingCode: %v", err)
+	}
+	if err := b.svc.JoinWithPairingCode(ctx, code); err != nil {
+		t.Fatalf("B.JoinWithPairingCode: %v", err)
+	}
+	waitUntil(t, 3*time.Second, "A and B connected", func() bool {
+		return isPeerConnected(a.svc, b.svc.Identity().DeviceID) &&
+			isPeerConnected(b.svc, a.svc.Identity().DeviceID)
+	})
+
+	payload := make([]byte, 2*model.DefaultChunkSize+128*1024)
+	for i := range payload {
+		payload[i] = byte((i*13 + 7) & 0xff)
+	}
+	srcFile := filepath.Join(t.TempDir(), "Downloads.zip")
+	if err := os.WriteFile(srcFile, payload, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	firstMsg, err := a.svc.SendFile(ctx, srcFile)
+	if err != nil {
+		t.Fatalf("first A.SendFile: %v", err)
+	}
+	waitUntil(t, 4*time.Second, "B receives first file message", func() bool {
+		msgs, _ := b.svc.ListMessages(10, "")
+		return len(msgs) == 1
+	})
+
+	// Simulate a previous interrupted download: chunk 1 cached on disk, task stuck in TransferFailed.
+	chunk1 := payload[model.DefaultChunkSize : 2*model.DefaultChunkSize]
+	if err := b.cas.WriteChunk(firstMsg.BlobHash, 1, model.Blake3Hex(chunk1), chunk1); err != nil {
+		t.Fatalf("WriteChunk(1): %v", err)
+	}
+	bm := model.SetChunk(model.NewChunkBitmap(3), 1)
+	if err := b.store.UpsertTransferTask(model.TransferTask{
+		BlobHash:    firstMsg.BlobHash,
+		Direction:   model.TransferDownload,
+		State:       model.TransferFailed,
+		ChunkCount:  3,
+		ChunkBitmap: bm,
+		BytesDone:   int64(len(chunk1)),
+		BytesTotal:  int64(len(payload)),
+		LastError:   "unexpected EOF",
+		UpdatedAt:   time.Now().Add(-time.Hour).UnixMilli(),
+	}); err != nil {
+		t.Fatalf("UpsertTransferTask(failed): %v", err)
+	}
+
+	// Sender re-sends the exact same large file.
+	if _, err := a.svc.SendFile(ctx, srcFile); err != nil {
+		t.Fatalf("second A.SendFile: %v", err)
+	}
+	waitUntil(t, 4*time.Second, "B receives re-sent file and clears stale failed state", func() bool {
+		msgs, _ := b.svc.ListMessages(10, "")
+		if len(msgs) != 2 {
+			return false
+		}
+		task, _ := b.svc.GetTransfer(firstMsg.BlobHash)
+		return task != nil && task.State == model.TransferPaused && task.LastError == ""
+	})
+
+	task, err := b.svc.GetTransfer(firstMsg.BlobHash)
+	if err != nil || task == nil {
+		t.Fatalf("GetTransfer after resend: task=%+v err=%v", task, err)
+	}
+	if task.BytesDone != int64(len(chunk1)) {
+		t.Fatalf("expected partial BytesDone=%d preserved, got %d", len(chunk1), task.BytesDone)
+	}
+
+	// Clicking Resume / DownloadFile completes cleanly using the preserved chunk.
+	if err := b.svc.DownloadFile(ctx, firstMsg.BlobHash); err != nil {
+		t.Fatalf("B.DownloadFile resume after resend: %v", err)
+	}
+	blobAfter, err := b.store.GetFileBlob(firstMsg.BlobHash)
+	if err != nil || blobAfter == nil || blobAfter.LocalPath == "" {
+		t.Fatalf("expected completed LocalPath, blob=%+v err=%v", blobAfter, err)
+	}
+	got, err := os.ReadFile(blobAfter.LocalPath)
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("resumed payload mismatch: err=%v len=%d want=%d", err, len(got), len(payload))
+	}
+}
+
+
