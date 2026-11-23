@@ -142,3 +142,80 @@ func TestManagerGitHubFallbackCheck(t *testing.T) {
 		t.Fatalf("expected BannerVisible false after Dismiss")
 	}
 }
+
+func TestManagerNativeEmptyNotesFetchesGitHubRelease(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/jae-jae/tailchat/releases/tags/v1.1.2" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"tag_name": "v1.1.2",
+			"body": "### Bug Fixes\n\n- prevent UI freezes",
+			"html_url": "https://github.com/jae-jae/tailchat/releases/tag/v1.1.2",
+			"draft": false,
+			"prerelease": false
+		}`))
+	}))
+	defer srv.Close()
+
+	handle := &fakeNativeHandle{
+		version: "1.1.2",
+		notes:   "",
+	}
+	backend := &fakeNativeBackend{
+		enabled:    true,
+		appVersion: "1.1.1",
+		handle:     handle,
+	}
+	mgr := NewManager(Options{
+		Repo:       "jae-jae/tailchat",
+		APIBase:    srv.URL,
+		HTTPClient: srv.Client(),
+		native:     backend,
+	})
+
+	st, err := mgr.Check(context.Background(), true)
+	if err != nil {
+		t.Fatalf("Check failed: %v", err)
+	}
+	if !st.Available || !st.CanAutoInstall || st.LatestVersion != "1.1.2" {
+		t.Fatalf("unexpected status: %+v", st)
+	}
+	wantNotes := "### Bug Fixes\n\n- prevent UI freezes"
+	if st.Notes != wantNotes {
+		t.Fatalf("expected backfilled notes %q, got %q", wantNotes, st.Notes)
+	}
+}
+
+func TestManagerNativeEmptyNotesIgnoresGitHubError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "rate limited", http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	handle := &fakeNativeHandle{
+		version: "1.1.2",
+		notes:   "",
+	}
+	backend := &fakeNativeBackend{
+		enabled:    true,
+		appVersion: "1.1.1",
+		handle:     handle,
+	}
+	mgr := NewManager(Options{
+		Repo:       "jae-jae/tailchat",
+		APIBase:    srv.URL,
+		HTTPClient: srv.Client(),
+		native:     backend,
+	})
+
+	st, err := mgr.Check(context.Background(), true)
+	if err != nil {
+		t.Fatalf("expected native check to succeed despite GitHub notes error, got: %v", err)
+	}
+	if !st.Available || !st.CanAutoInstall || st.LastError != "" {
+		t.Fatalf("unexpected status on notes fallback error: %+v", st)
+	}
+}

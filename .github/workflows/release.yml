@@ -251,6 +251,26 @@ jobs:
           mv mygo.json.tmp mygo.json
           echo "Injected version $(jq -r .version mygo.json) into mygo.json"
 
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+          path: release-notes
+
+      - name: Prepare CHANGELOG.md for MyGo update manifests
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "# Changelog"
+            echo ""
+            echo "## ${VERSION}"
+            echo ""
+            cat release-notes/release-notes.md
+          } > CHANGELOG.md
+          cat CHANGELOG.md
+
       - name: Install NSIS for Windows installers
         if: matrix.name == 'Windows' && runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y nsis

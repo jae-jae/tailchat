@@ -227,6 +227,24 @@ func (m *Manager) Check(ctx context.Context, manual bool) (Status, error) {
 			releaseURL = fmt.Sprintf("https://github.com/%s/releases/tag/v%s", m.repo, latestVer)
 			canInstall = true
 			pending = up
+			if notes == "" && latestVer != "" {
+				notesCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				rel, relErr := m.fetchGitHubReleaseByTag(notesCtx, latestVer, curVer)
+				if relErr == nil && rel == nil {
+					if latest, lErr := m.fetchLatestGitHubRelease(notesCtx, curVer); lErr == nil && latest != nil && CompareSemver(latest.Version, latestVer) == 0 {
+						rel = latest
+					}
+				}
+				cancel()
+				if relErr == nil && rel != nil {
+					if rel.Notes != "" {
+						notes = rel.Notes
+					}
+					if rel.URL != "" {
+						releaseURL = rel.URL
+					}
+				}
+			}
 		}
 	} else {
 		rel, err := m.fetchLatestGitHubRelease(ctx, curVer)
@@ -329,6 +347,16 @@ type githubReleaseInfo struct {
 
 func (m *Manager) fetchLatestGitHubRelease(ctx context.Context, curVer string) (*githubReleaseInfo, error) {
 	url := fmt.Sprintf("%s/repos/%s/releases/latest", m.apiBase, m.repo)
+	return m.fetchGitHubRelease(ctx, url, curVer)
+}
+
+func (m *Manager) fetchGitHubReleaseByTag(ctx context.Context, version, curVer string) (*githubReleaseInfo, error) {
+	tag := "v" + normalizeVersion(version)
+	url := fmt.Sprintf("%s/repos/%s/releases/tags/%s", m.apiBase, m.repo, tag)
+	return m.fetchGitHubRelease(ctx, url, curVer)
+}
+
+func (m *Manager) fetchGitHubRelease(ctx context.Context, url, curVer string) (*githubReleaseInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
