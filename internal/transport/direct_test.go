@@ -259,18 +259,18 @@ func TestDirectMTLSConnectionAndBidirectionalStream(t *testing.T) {
 		t.Fatalf("dialer ConfigureDirect: %v", err)
 	}
 
-	// Verify both sides report ConnPathDirect.
-	waitMeshCondition(t, 5*time.Second, "dialer direct status", func() bool {
+	// Verify dialer reports ConnPathCustomDirect (configured via override) and listener reports ConnPathLAN (inbound local loopback).
+	waitMeshCondition(t, 5*time.Second, "dialer custom direct status", func() bool {
 		for _, st := range dialerMesh.PeerStatuses() {
-			if st.DeviceID == listenerID.DeviceID && st.Connected && st.PathKind == model.ConnPathDirect && st.Endpoint == listenAddr {
+			if st.DeviceID == listenerID.DeviceID && st.Connected && st.PathKind == model.ConnPathCustomDirect && st.Endpoint == listenAddr {
 				return true
 			}
 		}
 		return false
 	})
-	waitMeshCondition(t, 5*time.Second, "listener direct inbound status", func() bool {
+	waitMeshCondition(t, 5*time.Second, "listener LAN direct inbound status", func() bool {
 		for _, st := range listenerMesh.PeerStatuses() {
-			if st.DeviceID == dialerID.DeviceID && st.Connected && st.PathKind == model.ConnPathDirect && st.Endpoint != "" {
+			if st.DeviceID == dialerID.DeviceID && st.Connected && st.PathKind == model.ConnPathLAN && st.Endpoint != "" {
 				return true
 			}
 		}
@@ -350,7 +350,7 @@ func TestDirectMTLSRejectsUnauthorizedWrongKeyWrongGroupAndRevoked(t *testing.T)
 	unlistedMesh.mu.Lock()
 	unlistedMesh.peerDirectOverrides = map[string]string{idServer.DeviceID: serverAddr}
 	unlistedMesh.mu.Unlock()
-	if sess, _, _, err := unlistedMesh.dialDirectPeer(context.Background(), psUnlisted); err == nil {
+	if sess, _, _, _, err := unlistedMesh.dialDirectPeer(context.Background(), psUnlisted); err == nil {
 		_ = sess.Close()
 		t.Fatalf("expected unlisted peer handshake to fail, but succeeded")
 	}
@@ -364,7 +364,7 @@ func TestDirectMTLSRejectsUnauthorizedWrongKeyWrongGroupAndRevoked(t *testing.T)
 	wrongGroupMesh.mu.Lock()
 	wrongGroupMesh.peerDirectOverrides = map[string]string{idServer.DeviceID: serverAddr}
 	wrongGroupMesh.mu.Unlock()
-	if sess, _, _, err := wrongGroupMesh.dialDirectPeer(context.Background(), psWrongGroup); err == nil {
+	if sess, _, _, _, err := wrongGroupMesh.dialDirectPeer(context.Background(), psWrongGroup); err == nil {
 		_ = sess.Close()
 		t.Fatalf("expected wrong GroupID peer handshake to fail, but succeeded")
 	}
@@ -380,25 +380,29 @@ func TestDirectMTLSRejectsUnauthorizedWrongKeyWrongGroupAndRevoked(t *testing.T)
 	validClientMesh.mu.Lock()
 	validClientMesh.peerDirectOverrides = map[string]string{idServer.DeviceID: serverAddr}
 	validClientMesh.mu.Unlock()
-	if sess, _, _, err := validClientMesh.dialDirectPeer(context.Background(), psBadKey); err == nil {
+	if sess, _, _, _, err := validClientMesh.dialDirectPeer(context.Background(), psBadKey); err == nil {
 		_ = sess.Close()
 		t.Fatalf("expected mismatched Ed25519 key handshake to fail, but succeeded")
 	}
 
-	// Case 4: Valid key succeeds, then after RevokePeer server rejects subsequent direct dials.
+	// Case 4: Valid key succeeds (reporting ConnPathCustomDirect), then after RevokePeer server rejects subsequent direct dials.
 	goodClientMesh, _ := startDirectOnlyMesh(t, idValidClient, false)
 	psGood := ensureTestPeer(t, goodClientMesh, makePeerDevice(idServer))
 	goodClientMesh.mu.Lock()
 	goodClientMesh.peerDirectOverrides = map[string]string{idServer.DeviceID: serverAddr}
 	goodClientMesh.mu.Unlock()
-	sess, _, _, err := goodClientMesh.dialDirectPeer(context.Background(), psGood)
+	sess, _, kind, _, err := goodClientMesh.dialDirectPeer(context.Background(), psGood)
 	if err != nil {
 		t.Fatalf("expected valid direct mTLS handshake to succeed, got: %v", err)
+	}
+	if kind != model.ConnPathCustomDirect {
+		_ = sess.Close()
+		t.Fatalf("dialDirectPeer custom kind = %q, want %q", kind, model.ConnPathCustomDirect)
 	}
 	_ = sess.Close()
 
 	serverMesh.RevokePeer(idValidClient.DeviceID)
-	if sess2, _, _, err := goodClientMesh.dialDirectPeer(context.Background(), psGood); err == nil {
+	if sess2, _, _, _, err := goodClientMesh.dialDirectPeer(context.Background(), psGood); err == nil {
 		_ = sess2.Close()
 		t.Fatalf("expected revoked peer handshake to fail, but succeeded")
 	}
@@ -431,14 +435,14 @@ func TestDirectFallbackToSecondCandidateAndUpgrade(t *testing.T) {
 	ps := ensureTestPeer(t, clientMesh, makePeerDevice(idB))
 
 	// Custom override points to deadAddr; learned LAN list contains liveAddr.
-	// dialDirectPeer must fail fast on deadAddr and succeed on liveAddr.
+	// dialDirectPeer must fail fast on deadAddr and succeed on liveAddr as ConnPathLAN.
 	clientMesh.mu.Lock()
 	clientMesh.peerDirectOverrides = map[string]string{idB.DeviceID: deadAddr}
 	clientMesh.peerLearnedDirect = map[string][]string{idB.DeviceID: {liveAddr}}
 	clientMesh.mu.Unlock()
 
 	start := time.Now()
-	sess, chosenAddr, _, err := clientMesh.dialDirectPeer(context.Background(), ps)
+	sess, chosenAddr, chosenKind, _, err := clientMesh.dialDirectPeer(context.Background(), ps)
 	if err != nil {
 		t.Fatalf("dialDirectPeer fallback failed: %v", err)
 	}
@@ -446,15 +450,18 @@ func TestDirectFallbackToSecondCandidateAndUpgrade(t *testing.T) {
 	if chosenAddr != liveAddr {
 		t.Fatalf("chosenAddr = %q, want fallback %q", chosenAddr, liveAddr)
 	}
+	if chosenKind != model.ConnPathLAN {
+		t.Fatalf("chosenKind = %q, want %q for learned LAN fallback", chosenKind, model.ConnPathLAN)
+	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("fallback took too long (%v), expected fast failure on closed port", elapsed)
 	}
 
-	// Verify tryUpgradeToDirect promotes peer to ConnPathDirect.
+	// Verify tryUpgradeToDirect promotes peer to ConnPathLAN.
 	clientMesh.tryUpgradeToDirect(context.Background(), ps, true)
-	waitMeshCondition(t, 3*time.Second, "tryUpgradeToDirect promotes peer to ConnPathDirect", func() bool {
+	waitMeshCondition(t, 3*time.Second, "tryUpgradeToDirect promotes peer to ConnPathLAN", func() bool {
 		for _, st := range clientMesh.PeerStatuses() {
-			if st.DeviceID == idB.DeviceID && st.Connected && st.PathKind == model.ConnPathDirect && st.Endpoint == liveAddr {
+			if st.DeviceID == idB.DeviceID && st.Connected && st.PathKind == model.ConnPathLAN && st.Endpoint == liveAddr {
 				return true
 			}
 		}

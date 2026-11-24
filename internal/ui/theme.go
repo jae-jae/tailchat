@@ -31,6 +31,13 @@ var (
 	zenAccentSoft    = mygoui.RGBA(10, 132, 255, 0.11)
 	zenAccentBorder  = mygoui.RGBA(10, 132, 255, 0.28)
 
+	zenCustomDirect       = mygoui.Hex("#0284C7")
+	zenCustomDirectSoft   = mygoui.RGBA(2, 132, 199, 0.12)
+	zenCustomDirectBorder = mygoui.RGBA(2, 132, 199, 0.28)
+
+	zenLANDirect     = mygoui.Hex("#0D9488")
+	zenLANDirectSoft = mygoui.RGBA(13, 148, 136, 0.12)
+
 	zenDirect     = mygoui.Hex("#10B981")
 	zenDirectText = mygoui.Hex("#059669")
 	zenDirectSoft = mygoui.RGBA(16, 185, 129, 0.12)
@@ -44,6 +51,7 @@ var (
 	zenDangerDark = mygoui.Hex("#DC2626")
 	zenDangerSoft = mygoui.RGBA(239, 68, 68, 0.10)
 
+	zenAccordionBg   = mygoui.Hex("#F8FBFF")
 	zenProgressTrack = mygoui.Hex("#E2E8F0")
 	zenTimeChipBg    = mygoui.RGBA(15, 23, 42, 0.05)
 	zenDropHintBg    = mygoui.RGBA(255, 255, 255, 0.60)
@@ -149,6 +157,8 @@ var (
 	iconGitHub = mygoui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>`))
 
 	iconAlertTriangle = mygoui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`))
+
+	iconNetwork = mygoui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/></svg>`))
 )
 
 // zenIcons lists all embedded SVG icons for unit-test validation.
@@ -184,6 +194,7 @@ var zenIcons = map[string]*mygoui.SVG{
 	"globe":         iconGlobe,
 	"github":        iconGitHub,
 	"alertTriangle": iconAlertTriangle,
+	"network":       iconNetwork,
 }
 
 // zenCircleBtn renders a 32x32 circular icon button with Zen Popover styling.

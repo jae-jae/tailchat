@@ -386,9 +386,12 @@ func (m *TailcatMesh) ConfigureDirect(listenPort int, peerOverrides map[string]s
 				ps.dialActive = false
 				cancel()
 			}
-			// If user changed custom IP while already on a different direct outbound address, switch immediately.
-			if newOverride != oldOverride && ps.outSession != nil && !ps.outSession.IsClosed() && ps.outIsDirect && newOverride != "" && ps.outDirectAddr != newOverride {
-				resetDirect = true
+			// If user changed or cleared custom IP while already on a direct outbound session, switch immediately.
+			if newOverride != oldOverride && ps.outSession != nil && !ps.outSession.IsClosed() && ps.outIsDirect {
+				if (newOverride != "" && ps.outDirectAddr != newOverride) ||
+					(newOverride == "" && ps.outDirectKind == model.ConnPathCustomDirect) {
+					resetDirect = true
+				}
 			}
 			// If currently connected over DERP and we now have direct candidates, proactively upgrade.
 			isAlreadyDirect := (ps.outSession != nil && !ps.outSession.IsClosed() && ps.outIsDirect) ||
@@ -565,6 +568,7 @@ func (m *TailcatMesh) handleDirectInboundConn(rawConn net.Conn) {
 	}
 
 	remoteAddr := rawConn.RemoteAddr().String()
+	inKind := m.classifyInboundDirectKind(verifiedPeerID, remoteAddr)
 	ps := m.getOrCreatePeer(verifiedPeerID, peerNodePub)
 
 	var prevIn *yamux.Session
@@ -577,6 +581,7 @@ func (m *TailcatMesh) handleDirectInboundConn(rawConn net.Conn) {
 	prevIn = ps.inSession
 	ps.inSession = sess
 	ps.inIsDirect = true
+	ps.inDirectKind = inKind
 	ps.inDirectAddr = remoteAddr
 	ps.mu.Unlock()
 
@@ -584,12 +589,51 @@ func (m *TailcatMesh) handleDirectInboundConn(rawConn net.Conn) {
 		_ = prevIn.Close()
 	}
 
-	log.Printf("tailcat: accepted direct mTLS connection from peer %s (%s)", shortIDForLog(verifiedPeerID), remoteAddr)
-	m.probeDirectSession(ps, sess, remoteAddr)
+	log.Printf("tailcat: accepted direct mTLS (%s) connection from peer %s (%s)", inKind, shortIDForLog(verifiedPeerID), remoteAddr)
+	m.probeDirectSession(ps, sess, inKind, remoteAddr)
 
 	if !m.goSpawn(func() { m.serveYamuxSession(rootCtx, ps, sess, false) }) {
 		_ = sess.Close()
 	}
+}
+
+func (m *TailcatMesh) classifyInboundDirectKind(deviceID, remoteAddr string) model.ConnPathKind {
+	remoteHost, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
+	if err != nil {
+		remoteHost = strings.TrimSpace(remoteAddr)
+	}
+	remoteIP, parseErr := netip.ParseAddr(remoteHost)
+	ipOK := parseErr == nil
+	if ipOK {
+		remoteIP = remoteIP.Unmap()
+	}
+
+	m.mu.Lock()
+	override := strings.TrimSpace(m.peerDirectOverrides[deviceID])
+	m.mu.Unlock()
+
+	if override != "" {
+		if ovHost, _, ovErr := net.SplitHostPort(override); ovErr == nil {
+			if ovIP, ovParseErr := netip.ParseAddr(ovHost); ovParseErr == nil && ipOK && ovIP.Unmap() == remoteIP {
+				return model.ConnPathCustomDirect
+			}
+			if strings.EqualFold(ovHost, remoteHost) {
+				return model.ConnPathCustomDirect
+			}
+		}
+	}
+
+	if ipOK {
+		if remoteIP.IsLoopback() ||
+			prefixRFC1918_192.Contains(remoteIP) ||
+			prefixRFC1918_10.Contains(remoteIP) ||
+			prefixRFC1918_172.Contains(remoteIP) ||
+			prefixIPv6ULA.Contains(remoteIP) {
+			return model.ConnPathLAN
+		}
+		return model.ConnPathCustomDirect
+	}
+	return model.ConnPathLAN
 }
 
 func (m *TailcatMesh) hasDirectOverrideLocked(deviceID string) bool {
@@ -680,37 +724,41 @@ func (m *TailcatMesh) ensureDirectCert() (tls.Certificate, string, error) {
 	return cert, groupID, nil
 }
 
-func (m *TailcatMesh) dialDirectPeer(ctx context.Context, ps *peerState) (*yamux.Session, string, float64, error) {
+func (m *TailcatMesh) dialDirectPeer(ctx context.Context, ps *peerState) (*yamux.Session, string, model.ConnPathKind, float64, error) {
 	candidates := m.directCandidatesForPeer(ps.deviceID)
 	if len(candidates) == 0 {
-		return nil, "", 0, errors.New("no direct candidates")
+		return nil, "", "", 0, errors.New("no direct candidates")
 	}
 
 	expectedSignKey := m.expectedPeerSignKey(ps)
 	if len(expectedSignKey) != ed25519.PublicKeySize {
-		return nil, "", 0, errors.New("peer missing ed25519 signing key for direct mTLS")
+		return nil, "", "", 0, errors.New("peer missing ed25519 signing key for direct mTLS")
 	}
 
 	cert, groupID, err := m.ensureDirectCert()
 	if err != nil {
-		return nil, "", 0, err
+		return nil, "", "", 0, err
 	}
 
 	var lastErr error
 	for _, cand := range candidates {
 		if ctx.Err() != nil {
-			return nil, "", 0, ctx.Err()
+			return nil, "", "", 0, ctx.Err()
 		}
 		sess, rttMs, dialErr := m.dialDirectCandidate(ctx, ps.deviceID, expectedSignKey, cert, groupID, cand)
 		if dialErr == nil {
-			return sess, cand.addr, rttMs, nil
+			kind := model.ConnPathLAN
+			if cand.isCustom {
+				kind = model.ConnPathCustomDirect
+			}
+			return sess, cand.addr, kind, rttMs, nil
 		}
 		lastErr = dialErr
 	}
 	if lastErr == nil {
 		lastErr = errors.New("all direct candidates failed")
 	}
-	return nil, "", 0, lastErr
+	return nil, "", "", 0, lastErr
 }
 
 func (m *TailcatMesh) dialDirectCandidate(
@@ -816,7 +864,7 @@ func (m *TailcatMesh) tryUpgradeToDirect(ctx context.Context, ps *peerState, for
 	ps.lastDirectAttempt = time.Now()
 	ps.mu.Unlock()
 
-	sess, addr, rttMs, err := m.dialDirectPeer(ctx, ps)
+	sess, addr, directKind, rttMs, err := m.dialDirectPeer(ctx, ps)
 	if err != nil {
 		return
 	}
@@ -846,14 +894,15 @@ func (m *TailcatMesh) tryUpgradeToDirect(ctx context.Context, ps *peerState, for
 	ps.outAddr = ""
 	ps.outDERPURL = ""
 	ps.outIsDirect = true
+	ps.outDirectKind = directKind
 	ps.outDirectAddr = addr
 	ps.mu.Unlock()
 
-	log.Printf("tailcat: upgraded peer %s from DERP to direct mTLS (%s, %.1fms)", shortIDForLog(ps.deviceID), addr, rttMs)
+	log.Printf("tailcat: upgraded peer %s from DERP to direct mTLS (%s, %s, %.1fms)", shortIDForLog(ps.deviceID), directKind, addr, rttMs)
 	m.updatePeerStatus(ps, model.PeerConnStatus{
 		DeviceID:  ps.deviceID,
 		Connected: true,
-		PathKind:  model.ConnPathDirect,
+		PathKind:  directKind,
 		Endpoint:  addr,
 		LatencyMs: rttMs,
 		UpdatedAt: time.Now().UnixMilli(),
@@ -871,14 +920,17 @@ func (m *TailcatMesh) tryUpgradeToDirect(ctx context.Context, ps *peerState, for
 	}
 }
 
-func (m *TailcatMesh) probeDirectSession(ps *peerState, sess *yamux.Session, endpoint string) {
+func (m *TailcatMesh) probeDirectSession(ps *peerState, sess *yamux.Session, kind model.ConnPathKind, endpoint string) {
 	if sess == nil || sess.IsClosed() {
 		return
+	}
+	if kind == "" {
+		kind = model.ConnPathLAN
 	}
 	st := model.PeerConnStatus{
 		DeviceID:  ps.deviceID,
 		Connected: true,
-		PathKind:  model.ConnPathDirect,
+		PathKind:  kind,
 		Endpoint:  endpoint,
 		UpdatedAt: time.Now().UnixMilli(),
 	}

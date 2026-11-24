@@ -183,14 +183,29 @@ type uiStrings struct {
 	ClipboardEmpty     string
 
 	// Devices popover
-	OnlyThisDevice    string
-	OnlineCountBadgeF string
-	NoPairedDevices   string
-	Offline           string
-	P2PDirect         string
-	DERPRelay         string
-	Connecting        string
-	Remove            string
+	OnlyThisDevice      string
+	OnlineCountBadgeF   string
+	NoPairedDevices     string
+	Offline             string
+	CustomDirect        string
+	LANDirect           string
+	P2PDirect           string
+	DERPRelay           string
+	Connecting          string
+	Remove              string
+	CopyLANShort        string
+	DirectListenerOff   string
+	EditDirectIPTip     string
+	CustomDirectTagF    string
+	DeviceDirectTitle   string
+	DeviceDirectHint    string
+	DeviceDirectPlace   string
+	DeviceDirectSave    string
+	DeviceDirectReset   string
+	DeviceAutoLANLabel  string
+	DeviceDirectSavedF  string
+	DeviceDirectCleared string
+	ErrInvalidPeerDirect string
 
 	// Pairing modal
 	PairDeviceTitle    string
@@ -252,19 +267,20 @@ type uiStrings struct {
 	RegionName         string
 	CustomNodePlace    string
 	ApplyHotSwitchDERP string
-	DirectConnTitle       string
-	DirectConnHint        string
-	DirectListenEnable    string
-	DirectListenPort      string
-	LocalLANAddrsLabel    string
-	CopyLANAddr           string
-	LANAddrCopiedToast    string
-	PeerDirectIPsLabel    string
-	PeerDirectIPHint      string
-	PeerDirectAutoPlaceF  string
-	PeerDirectEmptyPlace  string
-	NoPeersForDirect      string
-	AutoDownloadMB     string
+	DirectConnTitle         string
+	DirectConnHint          string
+	DirectListenEnable      string
+	DirectListenPort        string
+	LocalLANAddrsLabel      string
+	CopyLANAddr             string
+	LANAddrCopiedToast      string
+	PeerDirectIPsLabel      string
+	PeerDirectIPHint        string
+	PeerDirectAutoPlaceF    string
+	PeerDirectEmptyPlace    string
+	NoPeersForDirect        string
+	SettingsPeerIPMovedHint string
+	AutoDownloadMB          string
 	DownloadLimitKBs   string
 	TransferPolicyHint string
 	MinimizeToTray     string
@@ -291,6 +307,8 @@ type uiStrings struct {
 
 	// State toasts & errors
 	ConnOffline         string
+	ConnModeDERPF       string
+	ConnModeF           string
 	ConnDirectDERPF     string
 	ConnDirectF         string
 	ConnDERPF           string
@@ -424,14 +442,29 @@ var stringsEN = uiStrings{
 	OpenDialogFailPref: "Failed to open file picker: ",
 	ClipboardEmpty:     "Clipboard has no image, file, or text to send",
 
-	OnlyThisDevice:    "This device",
-	OnlineCountBadgeF: "%d online",
-	NoPairedDevices:   "No paired devices yet",
-	Offline:           "Offline",
-	P2PDirect:         "P2P Direct",
-	DERPRelay:         "DERP Relay",
-	Connecting:        "Connecting…",
-	Remove:            "Remove",
+	OnlyThisDevice:       "This device",
+	OnlineCountBadgeF:    "%d online",
+	NoPairedDevices:      "No paired devices yet",
+	Offline:              "Offline",
+	CustomDirect:         "Custom Direct",
+	LANDirect:            "LAN Direct",
+	P2PDirect:            "P2P Direct",
+	DERPRelay:            "DERP Relay",
+	Connecting:           "Connecting…",
+	Remove:               "Remove",
+	CopyLANShort:         "Copy LAN",
+	DirectListenerOff:    "LAN direct listener disabled",
+	EditDirectIPTip:      "Configure custom direct IP",
+	CustomDirectTagF:     "Custom: %s",
+	DeviceDirectTitle:    "Custom Direct IP",
+	DeviceDirectHint:     "Blank = auto, default :19840",
+	DeviceDirectPlace:    "e.g. 192.168.1.50 or IP:port",
+	DeviceDirectSave:     "Save",
+	DeviceDirectReset:    "Reset Auto",
+	DeviceAutoLANLabel:   "Auto LAN:",
+	DeviceDirectSavedF:   "Saved custom direct IP (%s)",
+	DeviceDirectCleared:  "Reset to auto LAN discovery",
+	ErrInvalidPeerDirect: "Enter a valid IP or IP:port (e.g. 192.168.1.50)",
 
 	PairDeviceTitle:    "Pair Device",
 	Close:              "Close",
@@ -490,32 +523,33 @@ var stringsEN = uiStrings{
 	STUNPort:           "STUN port",
 	RegionName:         "Region name",
 	CustomNodePlace:    "Custom node",
-	ApplyHotSwitchDERP:    "Apply & Hot-Switch DERP",
-	DirectConnTitle:       "LAN & Custom Direct",
-	DirectConnHint:        "Tries encrypted direct TCP first (Custom IP > Auto LAN), falling back to DERP seamlessly.",
-	DirectListenEnable:    "Listen for direct connections",
-	DirectListenPort:      "Port",
-	LocalLANAddrsLabel:    "This device LAN:",
-	CopyLANAddr:           "Copy",
-	LANAddrCopiedToast:    "Local direct address copied",
-	PeerDirectIPsLabel:    "Custom Peer IP (optional)",
-	PeerDirectIPHint:      "Leave blank for auto LAN discovery. Supports IP or IP:port (default 19840).",
-	PeerDirectAutoPlaceF:  "Auto: %s",
-	PeerDirectEmptyPlace:  "e.g. 192.168.1.10",
-	NoPeersForDirect:      "Pair another device first to configure custom direct IPs.",
-	AutoDownloadMB:        "Auto-download (MB)",
-	DownloadLimitKBs:      "Speed limit (KB/s)",
-	TransferPolicyHint:    "Files above the threshold wait for manual download; 0 = unlimited speed.",
-	MinimizeToTray:        "Minimize to tray when closing window",
-	ClearHistoryTitle:     "Clear All Chat History",
-	ClearHistoryNote:      "Clears chat history across all paired devices; local files stay intact",
-	ClearAllBtn:           "Clear All",
-	ClearConfirmTitle:     "Clear all chat history?",
-	ClearConfirmBody:      "This will sync and clear chat history on this device and all paired devices, while keeping locally saved files.",
-	ClearConfirmOK:        "Clear All",
-	AppTagline:            "Private P2P Device Mesh",
-	GitHubRepoLabel:       "GitHub",
-	SaveSettings:          "Save",
+	ApplyHotSwitchDERP:      "Apply & Hot-Switch DERP",
+	DirectConnTitle:         "LAN & Custom Direct",
+	DirectConnHint:          "Tries encrypted direct TCP first (Custom IP > Auto LAN), falling back to DERP seamlessly.",
+	DirectListenEnable:      "Listen for direct connections",
+	DirectListenPort:        "Port",
+	LocalLANAddrsLabel:      "This device LAN:",
+	CopyLANAddr:             "Copy",
+	LANAddrCopiedToast:      "Local direct address copied",
+	PeerDirectIPsLabel:      "Custom Peer IP (optional)",
+	PeerDirectIPHint:        "Leave blank for auto LAN discovery. Supports IP or IP:port (default 19840).",
+	PeerDirectAutoPlaceF:    "Auto: %s",
+	PeerDirectEmptyPlace:    "e.g. 192.168.1.10",
+	NoPeersForDirect:        "Pair another device first to configure custom direct IPs.",
+	SettingsPeerIPMovedHint: "Per-device custom direct IPs can be configured directly in the Paired Devices list.",
+	AutoDownloadMB:          "Auto-download (MB)",
+	DownloadLimitKBs:        "Speed limit (KB/s)",
+	TransferPolicyHint:      "Files above the threshold wait for manual download; 0 = unlimited speed.",
+	MinimizeToTray:          "Minimize to tray when closing window",
+	ClearHistoryTitle:       "Clear All Chat History",
+	ClearHistoryNote:        "Clears chat history across all paired devices; local files stay intact",
+	ClearAllBtn:             "Clear All",
+	ClearConfirmTitle:       "Clear all chat history?",
+	ClearConfirmBody:        "This will sync and clear chat history on this device and all paired devices, while keeping locally saved files.",
+	ClearConfirmOK:          "Clear All",
+	AppTagline:              "Private P2P Device Mesh",
+	GitHubRepoLabel:         "GitHub",
+	SaveSettings:            "Save",
 
 	ErrInvalidRegionID:    "Invalid Region ID",
 	ErrInvalidDERPPort:    "Invalid DERP port",
@@ -528,6 +562,8 @@ var stringsEN = uiStrings{
 	ErrNeedDERPMapURL:     "Please enter a custom DERPMap URL",
 
 	ConnOffline:         "Offline · Waiting for peers",
+	ConnModeDERPF:       "%d online · %s + DERP",
+	ConnModeF:           "%d online · %s",
 	ConnDirectDERPF:     "%d online · P2P Direct + DERP",
 	ConnDirectF:         "%d online · P2P Direct",
 	ConnDERPF:           "%d online · DERP Relay",
@@ -658,14 +694,29 @@ var stringsZH = uiStrings{
 	OpenDialogFailPref: "打开文件选择器失败：",
 	ClipboardEmpty:     "剪贴板中没有可发送的图片、文件或文字",
 
-	OnlyThisDevice:    "仅本机",
-	OnlineCountBadgeF: "%d 台在线",
-	NoPairedDevices:   "暂无已配对设备",
-	Offline:           "离线",
-	P2PDirect:         "P2P 直连",
-	DERPRelay:         "DERP 中继",
-	Connecting:        "正在连接…",
-	Remove:            "移除",
+	OnlyThisDevice:       "仅本机",
+	OnlineCountBadgeF:    "%d 台在线",
+	NoPairedDevices:      "暂无已配对设备",
+	Offline:              "离线",
+	CustomDirect:         "IP 直连",
+	LANDirect:            "局域网直连",
+	P2PDirect:            "P2P 直连",
+	DERPRelay:            "DERP 中继",
+	Connecting:           "正在连接…",
+	Remove:               "移除",
+	CopyLANShort:         "复制 LAN",
+	DirectListenerOff:    "局域网直连监听已关闭",
+	EditDirectIPTip:      "配置自定义直连 IP",
+	CustomDirectTagF:     "自定义: %s",
+	DeviceDirectTitle:    "自定义直连 IP",
+	DeviceDirectHint:     "留空走自动发现，默认端口 19840",
+	DeviceDirectPlace:    "如 192.168.1.50 或 IP:端口",
+	DeviceDirectSave:     "保存",
+	DeviceDirectReset:    "恢复自动",
+	DeviceAutoLANLabel:   "自动发现：",
+	DeviceDirectSavedF:   "已保存自定义直连 IP（%s）",
+	DeviceDirectCleared:  "已恢复自动发现直连",
+	ErrInvalidPeerDirect: "请输入有效的 IP 或 IP:端口（如 192.168.1.50）",
 
 	PairDeviceTitle:    "配对设备",
 	Close:              "关闭",
@@ -724,32 +775,33 @@ var stringsZH = uiStrings{
 	STUNPort:           "STUN 端口",
 	RegionName:         "区域名称",
 	CustomNodePlace:    "自建节点",
-	ApplyHotSwitchDERP:    "应用并热切 DERP",
-	DirectConnTitle:       "局域网 / 自定义直连",
-	DirectConnHint:        "优先尝试加密直连（自定义 IP > 自动发现局域网 IP），不可达时自动无缝回退至 DERP 中继。",
-	DirectListenEnable:    "启用局域网/自定义直连监听",
-	DirectListenPort:      "端口",
-	LocalLANAddrsLabel:    "本机局域网地址：",
-	CopyLANAddr:           "复制",
-	LANAddrCopiedToast:    "已复制本机直连地址",
-	PeerDirectIPsLabel:    "设备自定义直连 IP（可选）",
-	PeerDirectIPHint:      "留空则自动发现；支持填写 IP 或 IP:端口（默认 19840）。",
-	PeerDirectAutoPlaceF:  "自动：%s",
-	PeerDirectEmptyPlace:  "如 192.168.1.10",
-	NoPeersForDirect:      "配对其他设备后，可在此为每台设备配置自定义直连 IP。",
-	AutoDownloadMB:        "自动下载阈值 (MB)",
-	DownloadLimitKBs:      "下载限速 (KB/s)",
-	TransferPolicyHint:    "超过阈值的文件需手动点击下载；限速填 0 表示不限速。",
-	MinimizeToTray:        "关闭窗口时最小化到托盘",
-	ClearHistoryTitle:     "清空所有聊天记录",
-	ClearHistoryNote:      "同步清空所有配对设备的聊天记录，本地文件不受影响",
-	ClearAllBtn:           "一键清空",
-	ClearConfirmTitle:     "确认清空所有聊天记录？",
-	ClearConfirmBody:      "此操作将同步清空当前设备及所有已配对设备的聊天记录，但会保留本地已保存的文件。",
-	ClearConfirmOK:        "确认清空",
-	AppTagline:            "私有 P2P 设备互联",
-	GitHubRepoLabel:       "GitHub",
-	SaveSettings:          "保存设置",
+	ApplyHotSwitchDERP:      "应用并热切 DERP",
+	DirectConnTitle:         "局域网 / 自定义直连",
+	DirectConnHint:          "优先尝试加密直连（自定义 IP > 自动发现局域网 IP），不可达时自动无缝回退至 DERP 中继。",
+	DirectListenEnable:      "启用局域网/自定义直连监听",
+	DirectListenPort:        "端口",
+	LocalLANAddrsLabel:      "本机局域网地址：",
+	CopyLANAddr:             "复制",
+	LANAddrCopiedToast:      "已复制本机直连地址",
+	PeerDirectIPsLabel:      "设备自定义直连 IP（可选）",
+	PeerDirectIPHint:        "留空则自动发现；支持填写 IP 或 IP:端口（默认 19840）。",
+	PeerDirectAutoPlaceF:    "自动：%s",
+	PeerDirectEmptyPlace:    "如 192.168.1.10",
+	NoPeersForDirect:        "配对其他设备后，可在此为每台设备配置自定义直连 IP。",
+	SettingsPeerIPMovedHint: "逐设备的自定义直连 IP 请在顶部「已配对设备」列表中直接点击配置。",
+	AutoDownloadMB:          "自动下载阈值 (MB)",
+	DownloadLimitKBs:        "下载限速 (KB/s)",
+	TransferPolicyHint:      "超过阈值的文件需手动点击下载；限速填 0 表示不限速。",
+	MinimizeToTray:          "关闭窗口时最小化到托盘",
+	ClearHistoryTitle:       "清空所有聊天记录",
+	ClearHistoryNote:        "同步清空所有配对设备的聊天记录，本地文件不受影响",
+	ClearAllBtn:             "一键清空",
+	ClearConfirmTitle:       "确认清空所有聊天记录？",
+	ClearConfirmBody:        "此操作将同步清空当前设备及所有已配对设备的聊天记录，但会保留本地已保存的文件。",
+	ClearConfirmOK:          "确认清空",
+	AppTagline:              "私有 P2P 设备互联",
+	GitHubRepoLabel:         "GitHub",
+	SaveSettings:            "保存设置",
 
 	ErrInvalidRegionID:    "Region ID 无效",
 	ErrInvalidDERPPort:    "DERP 端口无效",
@@ -762,6 +814,8 @@ var stringsZH = uiStrings{
 	ErrNeedDERPMapURL:     "请输入自定义 DERPMap URL",
 
 	ConnOffline:         "离线 · 等待设备连接",
+	ConnModeDERPF:       "%d 台设备在线 · %s + DERP",
+	ConnModeF:           "%d 台设备在线 · %s",
 	ConnDirectDERPF:     "%d 台设备在线 · P2P 直连 + DERP",
 	ConnDirectF:         "%d 台设备在线 · P2P 直连",
 	ConnDERPF:           "%d 台设备在线 · DERP 中继",

@@ -1748,6 +1748,7 @@ func TestSettingsNetworkTabDirectLANAndPopoverEndpoint(t *testing.T) {
 	api := newMockAppAPI()
 	api.localDirectAddrs = []string{"192.168.1.10:19840"}
 	api.devices[1].DirectAddrs = []string{"192.168.1.42:19840"}
+	api.config.PeerDirectAddrs = map[string]string{"dev-peer-002": "10.0.0.5:19840"}
 
 	state := NewState(api)
 	state.Start(context.Background())
@@ -1764,16 +1765,27 @@ func TestSettingsNetworkTabDirectLANAndPopoverEndpoint(t *testing.T) {
 	tt := mygoui.NewTester(app.View, 540, 760)
 	tt.Frame()
 
-	// 1. Devices popover must show direct endpoint next to P2P 直连.
+	// 1. Devices popover must show self LAN address + Copy LAN button and remote P2P pill + endpoint.
 	app.devicesPopoverOpen = true
 	tt.Frame()
-	if !tt.HasText("P2P 直连 · 192.168.1.42:41641 · 3.4 ms") {
-		t.Fatalf("expected Devices popover to show direct endpoint; texts: %v", tt.Texts())
+	if !tt.HasText("LAN 192.168.1.10:19840") {
+		t.Fatalf("expected Devices popover self card to show LAN address; texts: %v", tt.Texts())
 	}
+	if !tt.HasText("P2P 直连") || !tt.HasText("192.168.1.42:41641 · 3.4 ms") {
+		t.Fatalf("expected Devices popover to show P2P pill and direct endpoint; texts: %v", tt.Texts())
+	}
+	if err := tt.Click("复制 LAN"); err != nil {
+		t.Fatalf("click 复制 LAN in popover: %v", err)
+	}
+	tt.Frame()
+	if copied != "192.168.1.10:19840" {
+		t.Fatalf("copied LAN addr from popover = %q, want 192.168.1.10:19840", copied)
+	}
+	copied = ""
 	app.devicesPopoverOpen = false
 	tt.Frame()
 
-	// 2. Open Settings -> Network tab and verify LAN Direct card & local address copy + custom peer IP save.
+	// 2. Open Settings -> Network tab: shows global direct listener + local LAN copy + moved hint (no per-device IP inputs).
 	if err := tt.Click("设置与 DERP"); err != nil {
 		t.Fatalf("open settings: %v", err)
 	}
@@ -1789,8 +1801,8 @@ func TestSettingsNetworkTabDirectLANAndPopoverEndpoint(t *testing.T) {
 	if !tt.HasText("192.168.1.10:19840") {
 		t.Fatalf("expected local LAN direct address in Network tab; texts: %v", tt.Texts())
 	}
-	if !tt.HasText("iPhone 16") {
-		t.Fatalf("expected paired device row iPhone 16 in Network tab; texts: %v", tt.Texts())
+	if !tt.HasText("逐设备的自定义直连 IP 请在顶部「已配对设备」列表中直接点击配置。") {
+		t.Fatalf("expected SettingsPeerIPMovedHint in Network tab; texts: %v", tt.Texts())
 	}
 
 	// Clicking Copy copies primary local LAN address to clipboard.
@@ -1802,11 +1814,171 @@ func TestSettingsNetworkTabDirectLANAndPopoverEndpoint(t *testing.T) {
 		t.Fatalf("copied LAN addr = %q, want 192.168.1.10:19840", copied)
 	}
 
-	// Simulate user typing a custom LAN IP for iPhone 16 and saving settings.
-	*app.settingsDraft.PeerDirectAddrPtr("dev-peer-002") = "192.168.50.8"
-	tt.Frame()
+	// Saving Settings must preserve existing PeerDirectAddrs configured from Devices popover.
 	if err := tt.Click("保存设置"); err != nil {
 		t.Fatalf("click 保存设置: %v", err)
+	}
+	tt.Frame()
+
+	saved := api.Config()
+	if saved.PeerDirectAddrs["dev-peer-002"] != "10.0.0.5:19840" {
+		t.Fatalf("saved PeerDirectAddrs[dev-peer-002] = %q, want preserved 10.0.0.5:19840", saved.PeerDirectAddrs["dev-peer-002"])
+	}
+}
+
+func TestDevicesPopoverFourLevelPathsHeaderAndCards(t *testing.T) {
+	cases := []struct {
+		name           string
+		lang           string
+		kind           model.ConnPathKind
+		endpoint       string
+		derpRegion     string
+		wantHeaderPart string
+		wantCardPill   string
+	}{
+		{
+			name:           "zh custom direct",
+			lang:           model.LanguageChinese,
+			kind:           model.ConnPathCustomDirect,
+			endpoint:       "192.168.1.50:19840",
+			wantHeaderPart: "1 台设备在线 · IP 直连",
+			wantCardPill:   "IP 直连",
+		},
+		{
+			name:           "zh lan direct",
+			lang:           model.LanguageChinese,
+			kind:           model.ConnPathLAN,
+			endpoint:       "192.168.1.42:19840",
+			wantHeaderPart: "1 台设备在线 · 局域网直连",
+			wantCardPill:   "局域网直连",
+		},
+		{
+			name:           "zh p2p direct",
+			lang:           model.LanguageChinese,
+			kind:           model.ConnPathDirect,
+			endpoint:       "203.0.113.8:41641",
+			wantHeaderPart: "1 台设备在线 · P2P 直连",
+			wantCardPill:   "P2P 直连",
+		},
+		{
+			name:           "zh derp relay",
+			lang:           model.LanguageChinese,
+			kind:           model.ConnPathDERP,
+			derpRegion:     "Tokyo",
+			wantHeaderPart: "1 台设备在线 · DERP 中继",
+			wantCardPill:   "DERP 中继",
+		},
+		{
+			name:           "en custom direct",
+			lang:           model.LanguageEnglish,
+			kind:           model.ConnPathCustomDirect,
+			endpoint:       "192.168.1.50:19840",
+			wantHeaderPart: "1 online · Custom Direct",
+			wantCardPill:   "Custom Direct",
+		},
+		{
+			name:           "en lan direct",
+			lang:           model.LanguageEnglish,
+			kind:           model.ConnPathLAN,
+			endpoint:       "192.168.1.42:19840",
+			wantHeaderPart: "1 online · LAN Direct",
+			wantCardPill:   "LAN Direct",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newMockAppAPI()
+			api.config.Language = tc.lang
+			api.peers = []model.PeerConnStatus{
+				{
+					DeviceID:   "dev-peer-002",
+					Connected:  true,
+					PathKind:   tc.kind,
+					Endpoint:   tc.endpoint,
+					DERPRegion: tc.derpRegion,
+					LatencyMs:  1.8,
+				},
+			}
+
+			state := NewState(api)
+			state.Start(context.Background())
+			t.Cleanup(state.Stop)
+
+			app := NewApp(state)
+			app.runAsync = func(fn func()) { fn() }
+
+			tt := mygoui.NewTester(app.View, 540, 760)
+			app.devicesPopoverOpen = true
+			tt.Frame()
+
+			if !tt.HasText(tc.wantHeaderPart) {
+				t.Fatalf("expected header %q; texts: %v", tc.wantHeaderPart, tt.Texts())
+			}
+			if !tt.HasText(tc.wantCardPill) {
+				t.Fatalf("expected device card pill %q; texts: %v", tc.wantCardPill, tt.Texts())
+			}
+		})
+	}
+}
+
+func TestDevicesPopoverOptionAAccordionDirectIP(t *testing.T) {
+	api := newMockAppAPI()
+	api.localDirectAddrs = []string{"192.168.1.10:19840"}
+	api.devices[1].DirectAddrs = []string{"192.168.1.42:19840"}
+
+	state := NewState(api)
+	state.Start(context.Background())
+	t.Cleanup(state.Stop)
+
+	app := NewApp(state)
+	app.runAsync = func(fn func()) { fn() }
+
+	tt := mygoui.NewTester(app.View, 540, 760)
+	app.devicesPopoverOpen = true
+	tt.Frame()
+
+	// 1. Click network icon button to expand inline accordion for iPhone 16.
+	if err := tt.Click("配置自定义直连 IP"); err != nil {
+		t.Fatalf("click network icon button: %v", err)
+	}
+	tt.Frame()
+
+	if app.expandedDeviceID != "dev-peer-002" {
+		t.Fatalf("expandedDeviceID = %q, want dev-peer-002", app.expandedDeviceID)
+	}
+	if !tt.HasText("自定义直连 IP") || !tt.HasText("192.168.1.42:19840") {
+		t.Fatalf("expected inline accordion and auto LAN chip; texts: %v", tt.Texts())
+	}
+
+	// 2. Click auto-discovered LAN chip to quick-fill the input.
+	if err := tt.Click("192.168.1.42:19840"); err != nil {
+		t.Fatalf("click auto LAN chip: %v", err)
+	}
+	tt.Frame()
+	if app.deviceDirectInput != "192.168.1.42:19840" {
+		t.Fatalf("deviceDirectInput after chip click = %q, want 192.168.1.42:19840", app.deviceDirectInput)
+	}
+
+	// 3. Invalid IP shows inline error without saving or collapsing.
+	app.deviceDirectInput = "http://192.168.1.50"
+	tt.Frame()
+	if err := tt.Click("保存"); err != nil {
+		t.Fatalf("click 保存 with invalid IP: %v", err)
+	}
+	tt.Frame()
+	if !tt.HasText("请输入有效的 IP 或 IP:端口（如 192.168.1.50）") {
+		t.Fatalf("expected inline validation error; texts: %v", tt.Texts())
+	}
+	if app.expandedDeviceID != "dev-peer-002" {
+		t.Fatalf("accordion should stay open on invalid IP")
+	}
+
+	// 4. Valid bare IP normalizes to default port 19840, saves, and collapses accordion.
+	app.deviceDirectInput = "192.168.50.8"
+	tt.Frame()
+	if err := tt.Click("保存"); err != nil {
+		t.Fatalf("click 保存 with valid IP: %v", err)
 	}
 	tt.Frame()
 
@@ -1814,8 +1986,28 @@ func TestSettingsNetworkTabDirectLANAndPopoverEndpoint(t *testing.T) {
 	if saved.PeerDirectAddrs["dev-peer-002"] != "192.168.50.8:19840" {
 		t.Fatalf("saved PeerDirectAddrs[dev-peer-002] = %q, want 192.168.50.8:19840", saved.PeerDirectAddrs["dev-peer-002"])
 	}
+	if app.expandedDeviceID != "" {
+		t.Fatalf("accordion should collapse after successful save, got %q", app.expandedDeviceID)
+	}
+
+	// 5. Re-expand accordion -> pre-fills saved custom IP and Reset Auto clears it.
+	if err := tt.Click("配置自定义直连 IP"); err != nil {
+		t.Fatalf("re-expand accordion: %v", err)
+	}
+	tt.Frame()
+	if app.deviceDirectInput != "192.168.50.8:19840" {
+		t.Fatalf("re-expanded deviceDirectInput = %q, want 192.168.50.8:19840", app.deviceDirectInput)
+	}
+	if err := tt.Click("恢复自动"); err != nil {
+		t.Fatalf("click 恢复自动: %v", err)
+	}
+	tt.Frame()
+
+	cleared := api.Config()
+	if _, exists := cleared.PeerDirectAddrs["dev-peer-002"]; exists {
+		t.Fatalf("expected dev-peer-002 custom IP to be cleared, got %v", cleared.PeerDirectAddrs)
+	}
+	if app.expandedDeviceID != "" {
+		t.Fatalf("accordion should collapse after Reset Auto, got %q", app.expandedDeviceID)
+	}
 }
-
-
-
-

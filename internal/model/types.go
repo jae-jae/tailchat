@@ -379,15 +379,23 @@ func NormalizeDirectAddr(raw string, defaultPort int) (string, error) {
 	return net.JoinHostPort(s, strconv.Itoa(defaultPort)), nil
 }
 
-// ConnPathKind indicates whether traffic to a peer is direct UDP or DERP-relayed.
+// ConnPathKind indicates whether traffic to a peer uses custom-IP direct TCP,
+// auto-discovered LAN direct TCP, Tailcat UDP P2P direct, or DERP relay.
 type ConnPathKind string
 
 const (
 	ConnPathDisconnected ConnPathKind = "disconnected"
 	ConnPathConnecting   ConnPathKind = "connecting"
 	ConnPathDERP         ConnPathKind = "derp"
-	ConnPathDirect       ConnPathKind = "direct"
+	ConnPathDirect       ConnPathKind = "direct"        // Tailcat UDP P2P direct
+	ConnPathLAN          ConnPathKind = "lan"           // Auto-discovered LAN TCP+mTLS direct
+	ConnPathCustomDirect ConnPathKind = "custom_direct" // User-configured custom IP TCP+mTLS direct
 )
+
+// IsDirect reports whether this path kind is any direct (non-relayed) transport path.
+func (k ConnPathKind) IsDirect() bool {
+	return k == ConnPathCustomDirect || k == ConnPathLAN || k == ConnPathDirect
+}
 
 // PeerConnStatus reports live connectivity and latency for one peer.
 type PeerConnStatus struct {

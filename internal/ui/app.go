@@ -32,9 +32,13 @@ type App struct {
 	searchRef          mygoui.Handle
 	concealedCopy      bool
 
-	// Lightweight Devices popover state.
+	// Lightweight Devices popover state (Option A · Inline Accordion).
 	devicesPopoverOpen bool
 	devicesErr         string
+	expandedDeviceID   string
+	deviceDirectInput  string
+	deviceDirectErr    string
+	deviceDirectSaving bool
 
 	// Dedicated 2-tab QR-first Pairing modal state.
 	pairOpen        bool
@@ -61,14 +65,17 @@ type App struct {
 	pendingDownloadDir *string
 
 	// Pending results from background UI operations (applied safely on UI thread).
-	asyncMu              sync.Mutex
-	pendingJoinDone      bool
-	pendingJoinErr       string
-	pendingDevicesErr    *string
-	pendingSettingsDone  bool
-	pendingSettingsErr   string
-	pendingSettingsClose bool
-	pendingPair          *pairGenResult
+	asyncMu               sync.Mutex
+	pendingJoinDone       bool
+	pendingJoinErr        string
+	pendingDevicesErr     *string
+	pendingPeerDirectDone bool
+	pendingPeerDirectDev  string
+	pendingPeerDirectErr  string
+	pendingSettingsDone   bool
+	pendingSettingsErr    string
+	pendingSettingsClose  bool
+	pendingPair           *pairGenResult
 
 	// Lazily decoded embedded TailChat app icon for About tab.
 	appIconOnce sync.Once
@@ -210,6 +217,14 @@ func (a *App) drainPendingAsync() {
 	}
 	devErr := a.pendingDevicesErr
 	a.pendingDevicesErr = nil
+	peerDirectDone := a.pendingPeerDirectDone
+	peerDirectDev := a.pendingPeerDirectDev
+	peerDirectErr := a.pendingPeerDirectErr
+	if peerDirectDone {
+		a.pendingPeerDirectDone = false
+		a.pendingPeerDirectDev = ""
+		a.pendingPeerDirectErr = ""
+	}
 	settingsDone := a.pendingSettingsDone
 	settingsErr := a.pendingSettingsErr
 	settingsClose := a.pendingSettingsClose
@@ -235,6 +250,19 @@ func (a *App) drainPendingAsync() {
 
 	if devErr != nil {
 		a.devicesErr = *devErr
+	}
+
+	if peerDirectDone {
+		a.deviceDirectSaving = false
+		if peerDirectErr != "" {
+			a.deviceDirectErr = peerDirectErr
+		} else {
+			a.deviceDirectErr = ""
+			if a.expandedDeviceID == peerDirectDev {
+				a.expandedDeviceID = ""
+				a.deviceDirectInput = ""
+			}
+		}
 	}
 
 	if settingsDone {
@@ -471,10 +499,17 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 	dotColor := zenOffline
 	subColor := zenInkMuted
 	if snap.OnlineCount > 0 {
-		if snap.HasDirect {
+		switch {
+		case snap.HasLANDirect:
+			dotColor = zenLANDirect
+			subColor = zenLANDirect
+		case snap.HasCustomDirect:
+			dotColor = zenCustomDirect
+			subColor = zenCustomDirect
+		case snap.HasP2PDirect:
 			dotColor = zenDirect
 			subColor = zenDirectText
-		} else {
+		default:
 			dotColor = zenDERP
 			subColor = zenDERPText
 		}
@@ -528,6 +563,11 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 						a.settingsOpen = false
 						a.clearConfirmOpen = false
 						a.devicesErr = ""
+						a.deviceDirectErr = ""
+					} else {
+						a.expandedDeviceID = ""
+						a.deviceDirectInput = ""
+						a.deviceDirectErr = ""
 					}
 				}
 
@@ -1228,6 +1268,35 @@ func (a *App) applySettingsAsync(cfg model.AppConfig, hotSwitchDERP bool) {
 		} else {
 			a.pendingSettingsErr = ""
 			a.pendingSettingsClose = true
+		}
+		a.asyncMu.Unlock()
+		a.invalidate()
+	})
+	a.drainPendingAsync()
+}
+
+func (a *App) savePeerDirectAddrAsync(deviceID, rawAddr string) {
+	if a.deviceDirectSaving {
+		return
+	}
+	// Fast synchronous format validation so invalid input shows an inline error immediately.
+	if _, err := model.NormalizeDirectAddr(rawAddr, model.DefaultDirectPort); err != nil {
+		a.deviceDirectErr = tr(a.state.Locale()).ErrInvalidPeerDirect
+		return
+	}
+	a.deviceDirectSaving = true
+	a.deviceDirectErr = ""
+	devID := deviceID
+	val := rawAddr
+	a.dispatchAsync(func() {
+		_, err := a.state.SetPeerDirectAddr(context.Background(), devID, val)
+		a.asyncMu.Lock()
+		a.pendingPeerDirectDone = true
+		a.pendingPeerDirectDev = devID
+		if err != nil {
+			a.pendingPeerDirectErr = err.Error()
+		} else {
+			a.pendingPeerDirectErr = ""
 		}
 		a.asyncMu.Unlock()
 		a.invalidate()

@@ -112,11 +112,13 @@ type peerState struct {
 	outAddr           string
 	outDERPURL        string
 	outIsDirect       bool
+	outDirectKind     model.ConnPathKind
 	outDirectAddr     string
 	lastDirectAttempt time.Time
 
 	inSession     *yamux.Session
 	inIsDirect    bool
+	inDirectKind  model.ConnPathKind
 	inDirectAddr  string
 	inboundPubKey key.NodePublic
 
@@ -856,12 +858,14 @@ func (m *TailcatMesh) clearClosedSession(ps *peerState, sess *yamux.Session) boo
 		ps.outAddr = ""
 		ps.outDERPURL = ""
 		ps.outIsDirect = false
+		ps.outDirectKind = ""
 		ps.outDirectAddr = ""
 		evicted = true
 	}
 	if ps.inSession == sess {
 		ps.inSession = nil
 		ps.inIsDirect = false
+		ps.inDirectKind = ""
 		ps.inDirectAddr = ""
 		evicted = true
 	}
@@ -927,6 +931,7 @@ func (m *TailcatMesh) ensureOutboundLocked(ctx context.Context, ps *peerState) (
 	ps.outAddr = ""
 	ps.outDERPURL = ""
 	ps.outIsDirect = false
+	ps.outDirectKind = ""
 	ps.outDirectAddr = ""
 	ps.mu.Unlock()
 
@@ -953,7 +958,7 @@ func (m *TailcatMesh) ensureOutboundLocked(ctx context.Context, ps *peerState) (
 		ps.lastDirectAttempt = time.Now()
 		ps.mu.Unlock()
 
-		sess, directAddr, rttMs, err := m.dialDirectPeer(ctx, ps)
+		sess, directAddr, directKind, rttMs, err := m.dialDirectPeer(ctx, ps)
 		if err == nil && sess != nil {
 			ps.mu.Lock()
 			if ps.revoked || rootCtx.Err() != nil {
@@ -966,14 +971,15 @@ func (m *TailcatMesh) ensureOutboundLocked(ctx context.Context, ps *peerState) (
 			ps.outAddr = ""
 			ps.outDERPURL = ""
 			ps.outIsDirect = true
+			ps.outDirectKind = directKind
 			ps.outDirectAddr = directAddr
 			ps.mu.Unlock()
 
-			log.Printf("tailcat: connected direct mTLS to peer %s (%s, %.1fms)", shortIDForLog(ps.deviceID), directAddr, rttMs)
+			log.Printf("tailcat: connected direct mTLS (%s) to peer %s (%s, %.1fms)", directKind, shortIDForLog(ps.deviceID), directAddr, rttMs)
 			m.updatePeerStatus(ps, model.PeerConnStatus{
 				DeviceID:  ps.deviceID,
 				Connected: true,
-				PathKind:  model.ConnPathDirect,
+				PathKind:  directKind,
 				Endpoint:  directAddr,
 				LatencyMs: rttMs,
 				UpdatedAt: time.Now().UnixMilli(),
@@ -1056,6 +1062,7 @@ func (m *TailcatMesh) ensureOutboundLocked(ctx context.Context, ps *peerState) (
 	ps.outAddr = addrStr
 	ps.outDERPURL = derpURL
 	ps.outIsDirect = false
+	ps.outDirectKind = ""
 	ps.outDirectAddr = ""
 	ps.mu.Unlock()
 
@@ -1190,6 +1197,7 @@ func (m *TailcatMesh) acceptLoop(srv *tailcat.Server, ln net.Listener) {
 			prevIn = ps.inSession
 			ps.inSession = sess
 			ps.inIsDirect = false
+			ps.inDirectKind = ""
 			ps.inDirectAddr = ""
 			ps.inboundPubKey = peerKey
 		}
@@ -1220,6 +1228,7 @@ func (m *TailcatMesh) serveYamuxSession(ctx context.Context, ps *peerState, sess
 		var oldClient *tailcat.Client
 		var remOutSess, remInSess *yamux.Session
 		var remOutDirect, remInDirect bool
+		var remOutDirectKind, remInDirectKind model.ConnPathKind
 		var remOutDirectAddr, remInDirectAddr string
 		var remOutClient *tailcat.Client
 		stillConnected := false
@@ -1232,16 +1241,19 @@ func (m *TailcatMesh) serveYamuxSession(ctx context.Context, ps *peerState, sess
 			ps.outAddr = ""
 			ps.outDERPURL = ""
 			ps.outIsDirect = false
+			ps.outDirectKind = ""
 			ps.outDirectAddr = ""
 		}
 		if !isOutbound && ps.inSession == sess {
 			ps.inSession = nil
 			ps.inIsDirect = false
+			ps.inDirectKind = ""
 			ps.inDirectAddr = ""
 		}
 		if ps.outSession != nil && !ps.outSession.IsClosed() {
 			remOutSess = ps.outSession
 			remOutDirect = ps.outIsDirect
+			remOutDirectKind = ps.outDirectKind
 			remOutDirectAddr = ps.outDirectAddr
 			remOutClient = ps.outClient
 			stillConnected = true
@@ -1249,6 +1261,7 @@ func (m *TailcatMesh) serveYamuxSession(ctx context.Context, ps *peerState, sess
 		if ps.inSession != nil && !ps.inSession.IsClosed() {
 			remInSess = ps.inSession
 			remInDirect = ps.inIsDirect
+			remInDirectKind = ps.inDirectKind
 			remInDirectAddr = ps.inDirectAddr
 			stillConnected = true
 		}
@@ -1271,9 +1284,9 @@ func (m *TailcatMesh) serveYamuxSession(ctx context.Context, ps *peerState, sess
 
 		// Refresh status to reflect whichever remaining session is still active.
 		if remOutSess != nil && remOutDirect {
-			m.probeDirectSession(ps, remOutSess, remOutDirectAddr)
+			m.probeDirectSession(ps, remOutSess, remOutDirectKind, remOutDirectAddr)
 		} else if remInSess != nil && remInDirect {
-			m.probeDirectSession(ps, remInSess, remInDirectAddr)
+			m.probeDirectSession(ps, remInSess, remInDirectKind, remInDirectAddr)
 		} else if remOutClient != nil && remOutSess != nil {
 			m.goSpawn(func() { m.probeOutboundClient(ctx, ps, remOutClient) })
 		} else if remInSess != nil {
@@ -1385,9 +1398,11 @@ func (m *TailcatMesh) pollPeerStatuses(ctx context.Context) {
 		outClient := ps.outClient
 		outSess := ps.outSession
 		outDirect := ps.outIsDirect
+		outDirectKind := ps.outDirectKind
 		outDirectAddr := ps.outDirectAddr
 		inSess := ps.inSession
 		inDirect := ps.inIsDirect
+		inDirectKind := ps.inDirectKind
 		inDirectAddr := ps.inDirectAddr
 		revoked := ps.revoked
 		ps.mu.Unlock()
@@ -1399,11 +1414,11 @@ func (m *TailcatMesh) pollPeerStatuses(ctx context.Context) {
 		inOpen := inSess != nil && !inSess.IsClosed()
 
 		if outOpen && outDirect {
-			m.probeDirectSession(ps, outSess, outDirectAddr)
+			m.probeDirectSession(ps, outSess, outDirectKind, outDirectAddr)
 			continue
 		}
 		if inOpen && inDirect {
-			m.probeDirectSession(ps, inSess, inDirectAddr)
+			m.probeDirectSession(ps, inSess, inDirectKind, inDirectAddr)
 			continue
 		}
 
@@ -1747,8 +1762,10 @@ func (m *TailcatMesh) Close(ctx context.Context) error {
 		ps.inSession = nil
 		ps.outClient = nil
 		ps.outIsDirect = false
+		ps.outDirectKind = ""
 		ps.outDirectAddr = ""
 		ps.inIsDirect = false
+		ps.inDirectKind = ""
 		ps.inDirectAddr = ""
 		ps.mu.Unlock()
 
@@ -1854,6 +1871,7 @@ func (m *TailcatMesh) resetOutboundPeer(ps *peerState) {
 	ps.outAddr = ""
 	ps.outDERPURL = ""
 	ps.outIsDirect = false
+	ps.outDirectKind = ""
 	ps.outDirectAddr = ""
 	ps.mu.Unlock()
 
@@ -1884,8 +1902,10 @@ func (m *TailcatMesh) teardownPeer(ps *peerState, markRevoked bool) {
 	ps.outAddr = ""
 	ps.outDERPURL = ""
 	ps.outIsDirect = false
+	ps.outDirectKind = ""
 	ps.outDirectAddr = ""
 	ps.inIsDirect = false
+	ps.inDirectKind = ""
 	ps.inDirectAddr = ""
 	ps.mu.Unlock()
 

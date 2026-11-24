@@ -241,7 +241,7 @@ func (a *App) renderDevicesPopover(c *mygoui.Context, anchor mygoui.Element, sna
 	mygoui.PopoverBase(c.Key("popover-devices"), anchor, &a.devicesPopoverOpen, func(panel mygoui.Element) {
 		panel.AttachTo(anchor, mygoui.AnchorBottomRight, mygoui.AnchorTopRight).
 			Margin(8, 0, 0, 0).
-			Width(300).
+			Width(356).
 			Padding(14).
 			Radius(16).
 			Background(zenSurface).
@@ -271,22 +271,16 @@ func (a *App) renderDevicesPopover(c *mygoui.Context, anchor mygoui.Element, sna
 					})
 			})
 
-			// Compact device list (bounded scroll when there are many paired devices).
+			// Device list with bounded max height so expanding an inline IP accordion never overflows.
 			if len(snap.Devices) == 0 {
 				mygoui.Text(c, t.NoPairedDevices).FontSize(12).TextColor(zenInkMuted)
-			} else if len(snap.Devices) > 4 {
-				mygoui.Scroll(c.Key("popover-dev-scroll")).Height(220).FillWidth().Children(func() {
+			} else {
+				mygoui.Scroll(c.Key("popover-dev-scroll")).MaxHeight(420).FillWidth().Children(func() {
 					mygoui.Column(c).Gap(7).FillWidth().Children(func() {
 						for _, dev := range snap.Devices {
 							a.renderPopoverDeviceCard(c, snap, dev)
 						}
 					})
-				})
-			} else {
-				mygoui.Column(c).Gap(7).FillWidth().Children(func() {
-					for _, dev := range snap.Devices {
-						a.renderPopoverDeviceCard(c, snap, dev)
-					}
 				})
 			}
 
@@ -729,46 +723,403 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 		title = shortID(dev.DeviceID)
 	}
 
-	subtitle := t.Offline
-	subColor := zenInkMuted
-	online := false
-	statusColor := zenInkMuted
-
 	if isSelf {
-		subtitle = t.ThisDevice
-		subColor = zenAccent
-		online = true
-		statusColor = zenDirect
-	} else if hasPeer && peer.Connected {
-		online = true
-		switch peer.PathKind {
-		case model.ConnPathDirect:
-			subtitle = t.P2PDirect
-			if peer.Endpoint != "" {
-				subtitle += " · " + peer.Endpoint
-			}
-			subColor = zenDirectText
-			statusColor = zenDirect
-		case model.ConnPathDERP:
-			subtitle = t.DERPRelay
-			if peer.DERPRegion != "" {
-				subtitle += " · " + peer.DERPRegion
-			}
-			subColor = zenDERPText
-			statusColor = zenDERP
-		default:
-			subtitle = string(peer.PathKind)
-			statusColor = zenDirect
-		}
-		if peer.LatencyMs > 0 {
-			subtitle += fmt.Sprintf(" · %.1f ms", peer.LatencyMs)
-		}
-	} else if hasPeer && peer.PathKind == model.ConnPathConnecting {
-		subtitle = t.Connecting
+		a.renderPopoverSelfCard(c, snap, dev, title, t)
+		return
 	}
 
-	mygoui.Row(c.Key("dev-"+dev.DeviceID)).
-		Padding(9, 11).
+	customAddr := strings.TrimSpace(snap.Config.PeerDirectAddrs[dev.DeviceID])
+	isExpanded := a.expandedDeviceID == dev.DeviceID
+
+	pillText := t.Offline
+	pillFg := zenInkMuted
+	pillBg := zenInputFill
+	subText := ""
+	subColor := zenInkSecondary
+	subMono := true
+
+	if hasPeer && peer.Connected {
+		switch peer.PathKind {
+		case model.ConnPathCustomDirect:
+			pillText = t.CustomDirect
+			pillFg = zenCustomDirect
+			pillBg = zenCustomDirectSoft
+			subText = peer.Endpoint
+		case model.ConnPathLAN:
+			pillText = t.LANDirect
+			pillFg = zenLANDirect
+			pillBg = zenLANDirectSoft
+			subText = peer.Endpoint
+		case model.ConnPathDirect:
+			pillText = t.P2PDirect
+			pillFg = zenDirectText
+			pillBg = zenDirectSoft
+			subText = peer.Endpoint
+		case model.ConnPathDERP:
+			pillText = t.DERPRelay
+			pillFg = zenDERPText
+			pillBg = zenDERPSoft
+			subText = peer.DERPRegion
+			subMono = false
+		default:
+			pillText = string(peer.PathKind)
+			pillFg = zenDirectText
+			pillBg = zenDirectSoft
+			subText = peer.Endpoint
+		}
+		if peer.LatencyMs > 0 {
+			if subText != "" {
+				subText += fmt.Sprintf(" · %.1f ms", peer.LatencyMs)
+			} else {
+				subText = fmt.Sprintf("%.1f ms", peer.LatencyMs)
+			}
+		}
+		if subText == "" {
+			if customAddr != "" {
+				subText = fmt.Sprintf(t.CustomDirectTagF, customAddr)
+			} else {
+				subText = shortID(dev.DeviceID)
+			}
+		}
+	} else if hasPeer && peer.PathKind == model.ConnPathConnecting {
+		pillText = t.Connecting
+		pillFg = zenInkSecondary
+		pillBg = zenInputFill
+		subColor = zenInkMuted
+		if customAddr != "" {
+			subText = fmt.Sprintf(t.CustomDirectTagF, customAddr)
+		} else {
+			subText = shortID(dev.DeviceID)
+		}
+	} else {
+		subColor = zenInkMuted
+		if customAddr != "" {
+			subText = fmt.Sprintf(t.CustomDirectTagF, customAddr)
+		} else {
+			subText = shortID(dev.DeviceID)
+		}
+	}
+
+	card := mygoui.Column(c.Key("dev-" + dev.DeviceID)).
+		Radius(12).
+		Clip().
+		FillWidth()
+	if isExpanded {
+		card.Background(zenSurface).
+			Border(1, zenAccentBorder).
+			Shadow(0, 4, 14, 0, mygoui.RGBA(10, 132, 255, 0.08))
+	} else {
+		card.Background(zenSurfaceSubtle).
+			Border(1, zenBorder)
+	}
+
+	card.Children(func() {
+		// Main device summary row.
+		mygoui.Row(c).
+			Padding(9, 10).
+			Gap(8).
+			AlignItems(mygoui.Center).
+			FillWidth().
+			Children(func() {
+				mygoui.Column(c).Grow(1).MinWidth(0).Clip().Gap(2).Children(func() {
+					mygoui.Row(c).AlignItems(mygoui.Center).Gap(6).FillWidth().Children(func() {
+						mygoui.Text(c, title).
+							FontSize(12.5).
+							Bold().
+							TextColor(zenInk).
+							Shrink(1).
+							MinWidth(0).
+							SingleLine()
+						mygoui.Row(c).
+							Padding(1.5, 6).
+							Radius(99).
+							Background(pillBg).
+							Shrink(0).
+							Children(func() {
+								mygoui.Text(c, pillText).
+									FontSize(10).
+									FontWeight(650).
+									TextColor(pillFg).
+									NoWrap()
+							})
+					})
+
+					subEl := mygoui.Text(c, subText).
+						FontSize(11).
+						TextColor(subColor).
+						FillWidth().
+						SingleLine()
+					if subMono {
+						subEl.Font("SF Mono, Menlo, monospace")
+					}
+				})
+
+				// Right action icon buttons: Direct IP accordion toggle + Remove device.
+				mygoui.Row(c).AlignItems(mygoui.Center).Gap(5).Shrink(0).Children(func() {
+					netBtn := mygoui.ButtonBase(c.Key("btn-dev-direct-" + dev.DeviceID))
+					netBg := zenSurface
+					netBorder := zenBorder
+					netFg := zenInkSecondary
+					switch {
+					case isExpanded:
+						netBg = zenAccent
+						netBorder = zenAccent
+						netFg = zenSelfBubbleInk
+						if netBtn.Pressed() {
+							netBg = zenAccentPressed
+							netBorder = zenAccentPressed
+						} else if netBtn.Hovered() {
+							netBg = zenAccentHover
+							netBorder = zenAccentHover
+						}
+					case customAddr != "":
+						netBg = zenCustomDirectSoft
+						netBorder = zenCustomDirectBorder
+						netFg = zenCustomDirect
+						if netBtn.Pressed() {
+							netBg = mygoui.RGBA(2, 132, 199, 0.24)
+						} else if netBtn.Hovered() {
+							netBg = mygoui.RGBA(2, 132, 199, 0.18)
+						}
+					default:
+						if netBtn.Pressed() {
+							netBg = zenProgressTrack
+							netBorder = zenBorderStrong
+							netFg = zenInk
+						} else if netBtn.Hovered() {
+							netBg = zenInputFill
+							netBorder = zenBorderStrong
+							netFg = zenInk
+						}
+					}
+					netBtn.Size(27, 27).
+						Radius(8).
+						Background(netBg).
+						Border(1, netBorder).
+						Justify(mygoui.Center).
+						AlignItems(mygoui.Center).
+						Cursor(mygoui.CursorPointer).
+						Label(t.EditDirectIPTip).
+						Tooltip(t.EditDirectIPTip).
+						Children(func() {
+							mygoui.Icon(c, iconNetwork).Size(13, 13).TextColor(netFg)
+						})
+					if netBtn.Clicked() {
+						if isExpanded {
+							a.expandedDeviceID = ""
+							a.deviceDirectErr = ""
+						} else {
+							a.expandedDeviceID = dev.DeviceID
+							a.deviceDirectInput = customAddr
+							a.deviceDirectErr = ""
+						}
+					}
+
+					rmBtn := mygoui.ButtonBase(c.Key("revoke-" + dev.DeviceID))
+					rmBg := zenDangerSoft
+					rmBorder := mygoui.RGBA(239, 68, 68, 0.18)
+					rmFg := zenDanger
+					if rmBtn.Pressed() {
+						rmBg = mygoui.RGBA(239, 68, 68, 0.24)
+						rmFg = zenDangerDark
+					} else if rmBtn.Hovered() {
+						rmBg = mygoui.RGBA(239, 68, 68, 0.18)
+						rmFg = zenDangerDark
+					}
+					rmBtn.Size(27, 27).
+						Radius(8).
+						Background(rmBg).
+						Border(1, rmBorder).
+						Justify(mygoui.Center).
+						AlignItems(mygoui.Center).
+						Cursor(mygoui.CursorPointer).
+						Label(t.Remove).
+						Tooltip(t.Remove).
+						Children(func() {
+							mygoui.Icon(c, iconTrash).Size(13, 13).TextColor(rmFg)
+						})
+					if rmBtn.Clicked() {
+						devID := dev.DeviceID
+						if a.expandedDeviceID == devID {
+							a.expandedDeviceID = ""
+							a.deviceDirectInput = ""
+							a.deviceDirectErr = ""
+						}
+						a.dispatchAsync(func() {
+							err := a.state.RevokeDevice(context.Background(), devID)
+							errStr := ""
+							if err != nil {
+								errStr = err.Error()
+							}
+							a.asyncMu.Lock()
+							a.pendingDevicesErr = &errStr
+							a.asyncMu.Unlock()
+							a.invalidate()
+						})
+					}
+				})
+			})
+
+		// Option A: inline accordion drawer for per-device custom direct IP.
+		if isExpanded {
+			mygoui.Box(c).Height(1).FillWidth().Background(zenBorder)
+			mygoui.Column(c).
+				Padding(10).
+				Gap(7).
+				Background(zenAccordionBg).
+				FillWidth().
+				Children(func() {
+					mygoui.Row(c).AlignItems(mygoui.Center).Gap(6).FillWidth().Children(func() {
+						mygoui.Text(c, t.DeviceDirectTitle).FontSize(11).FontWeight(600).TextColor(zenInkSecondary).NoWrap()
+						mygoui.Spacer(c)
+						mygoui.Text(c, t.DeviceDirectHint).FontSize(10).TextColor(zenInkMuted).NoWrap()
+					})
+
+					var ipInput mygoui.Element
+					var saveClicked, resetClicked bool
+					mygoui.Row(c).AlignItems(mygoui.Center).Gap(6).FillWidth().Children(func() {
+						ipInput = mygoui.TextInput(c.Key("dev-direct-input-"+dev.DeviceID), &a.deviceDirectInput).
+							Placeholder(t.DeviceDirectPlace).
+							Label(t.DeviceDirectTitle).
+							Grow(1)
+
+						saveBtn := mygoui.ButtonBase(c.Key("btn-dev-direct-save-" + dev.DeviceID))
+						saveBg := zenAccent
+						if a.deviceDirectSaving {
+							saveBg = zenInkMuted
+						} else if saveBtn.Pressed() {
+							saveBg = zenAccentPressed
+						} else if saveBtn.Hovered() {
+							saveBg = zenAccentHover
+						}
+						saveBtn.Height(30).
+							Padding(0, 11).
+							Radius(8).
+							Background(saveBg).
+							Justify(mygoui.Center).
+							AlignItems(mygoui.Center).
+							Shrink(0).
+							Disabled(a.deviceDirectSaving).
+							Label(t.DeviceDirectSave)
+						if !a.deviceDirectSaving {
+							saveBtn.Cursor(mygoui.CursorPointer)
+						}
+						saveBtn.Children(func() {
+							mygoui.Text(c, t.DeviceDirectSave).FontSize(11.5).FontWeight(600).TextColor(zenSelfBubbleInk).NoWrap()
+						})
+						saveClicked = saveBtn.Clicked()
+
+						if customAddr != "" || strings.TrimSpace(a.deviceDirectInput) != "" {
+							resetBtn := mygoui.ButtonBase(c.Key("btn-dev-direct-reset-" + dev.DeviceID))
+							resetBg := zenSurface
+							if !a.deviceDirectSaving {
+								if resetBtn.Pressed() {
+									resetBg = zenProgressTrack
+								} else if resetBtn.Hovered() {
+									resetBg = zenInputFill
+								}
+							}
+							resetBtn.Height(30).
+								Padding(0, 9).
+								Radius(8).
+								Background(resetBg).
+								Border(1, zenBorderStrong).
+								Justify(mygoui.Center).
+								AlignItems(mygoui.Center).
+								Shrink(0).
+								Disabled(a.deviceDirectSaving).
+								Label(t.DeviceDirectReset)
+							if !a.deviceDirectSaving {
+								resetBtn.Cursor(mygoui.CursorPointer)
+							}
+							resetBtn.Children(func() {
+								mygoui.Text(c, t.DeviceDirectReset).FontSize(11.5).FontWeight(600).TextColor(zenInkSecondary).NoWrap()
+							})
+							resetClicked = resetBtn.Clicked()
+						}
+					})
+
+					if (saveClicked || ipInput.Submitted()) && !a.deviceDirectSaving {
+						a.savePeerDirectAddrAsync(dev.DeviceID, a.deviceDirectInput)
+					} else if resetClicked && !a.deviceDirectSaving {
+						a.deviceDirectInput = ""
+						a.savePeerDirectAddrAsync(dev.DeviceID, "")
+					}
+
+					// Quick-fill chips for auto-discovered LAN addresses.
+					if len(dev.DirectAddrs) > 0 {
+						maxChips := len(dev.DirectAddrs)
+						if maxChips > 2 {
+							maxChips = 2
+						}
+						mygoui.Row(c).AlignItems(mygoui.Center).Gap(5).FillWidth().Children(func() {
+							mygoui.Text(c, t.DeviceAutoLANLabel).FontSize(10.5).TextColor(zenInkMuted).NoWrap()
+							for i := 0; i < maxChips; i++ {
+								addr := dev.DirectAddrs[i]
+								chip := mygoui.ButtonBase(c.Key(fmt.Sprintf("btn-dev-lan-chip-%s-%d", dev.DeviceID, i)))
+								chipBg := zenSurface
+								chipBorder := zenBorderStrong
+								chipFg := zenInkSecondary
+								if chip.Pressed() {
+									chipBg = zenAccentSoft
+									chipBorder = zenAccent
+									chipFg = zenAccent
+								} else if chip.Hovered() {
+									chipBg = zenAccentSoft
+									chipBorder = zenAccentBorder
+									chipFg = zenAccent
+								}
+								chip.Padding(2, 7).
+									Radius(99).
+									Background(chipBg).
+									Border(1, chipBorder).
+									AlignItems(mygoui.Center).
+									Justify(mygoui.Center).
+									Shrink(1).
+									MinWidth(0).
+									Cursor(mygoui.CursorPointer).
+									Label(addr).
+									Children(func() {
+										mygoui.Text(c, addr).
+											FontSize(10.5).
+											Font("SF Mono, Menlo, monospace").
+											TextColor(chipFg).
+											SingleLine()
+									})
+								if chip.Clicked() {
+									a.deviceDirectInput = addr
+									a.deviceDirectErr = ""
+								}
+							}
+						})
+					}
+
+					if a.deviceDirectErr != "" {
+						mygoui.Text(c, a.deviceDirectErr).FontSize(11).TextColor(zenDangerDark).Wrap().FillWidth()
+					}
+				})
+		}
+	})
+}
+
+func (a *App) renderPopoverSelfCard(c *mygoui.Context, snap ViewSnapshot, dev model.Device, title string, t uiStrings) {
+	hasLAN := !snap.Config.DirectListenDisabled && len(snap.LocalDirectAddrs) > 0
+
+	subText := shortID(dev.DeviceID)
+	subColor := zenInkMuted
+	subMono := true
+	subTip := ""
+	if hasLAN {
+		subText = "LAN " + snap.LocalDirectAddrs[0]
+		subColor = zenInkSecondary
+		subTip = strings.Join(snap.LocalDirectAddrs, "\n")
+	} else if snap.Config.DirectListenDisabled {
+		subText = t.DirectListenerOff
+		subMono = false
+	}
+
+	mygoui.Row(c.Key("dev-" + dev.DeviceID)).
+		Padding(9, 10).
 		Gap(8).
 		Radius(12).
 		Background(zenSurfaceSubtle).
@@ -777,32 +1128,75 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 		FillWidth().
 		Children(func() {
 			mygoui.Column(c).Grow(1).MinWidth(0).Clip().Gap(2).Children(func() {
-				mygoui.Text(c, title).FontSize(12.5).Bold().TextColor(zenInk).FillWidth().SingleLine()
-				mygoui.Text(c, subtitle).FontSize(11).TextColor(subColor).FillWidth().SingleLine()
+				mygoui.Row(c).AlignItems(mygoui.Center).Gap(6).FillWidth().Children(func() {
+					mygoui.Text(c, title).
+						FontSize(12.5).
+						Bold().
+						TextColor(zenInk).
+						Shrink(1).
+						MinWidth(0).
+						SingleLine()
+					mygoui.Row(c).
+						Padding(1.5, 6).
+						Radius(99).
+						Background(zenAccentSoft).
+						Shrink(0).
+						Children(func() {
+							mygoui.Text(c, t.ThisDevice).
+								FontSize(10).
+								FontWeight(650).
+								TextColor(zenAccent).
+								NoWrap()
+						})
+				})
+
+				subEl := mygoui.Text(c, subText).
+					FontSize(11).
+					TextColor(subColor).
+					FillWidth().
+					SingleLine()
+				if subMono {
+					subEl.Font("SF Mono, Menlo, monospace")
+				}
+				if subTip != "" {
+					subEl.Tooltip(subTip)
+				}
 			})
 
-			if online {
-				mygoui.Icon(c, iconCheckCircle).Size(15, 15).TextColor(statusColor)
-			} else {
-				mygoui.Icon(c, iconCircleDashed).Size(15, 15).TextColor(zenInkMuted)
-			}
-
-			if !isSelf {
-				if zenDangerPillBtn(c, "revoke-"+dev.DeviceID, t.Remove).Clicked() {
-					devID := dev.DeviceID
-					a.dispatchAsync(func() {
-						err := a.state.RevokeDevice(context.Background(), devID)
-						errStr := ""
-						if err != nil {
-							errStr = err.Error()
-						}
-						a.asyncMu.Lock()
-						a.pendingDevicesErr = &errStr
-						a.asyncMu.Unlock()
-						if a.win != nil {
-							a.win.Invalidate()
-						}
+			if hasLAN {
+				primary := snap.LocalDirectAddrs[0]
+				copyBtn := mygoui.ButtonBase(c.Key("btn-popover-copy-lan"))
+				copyBg := zenSurface
+				copyFg := zenInkSecondary
+				if copyBtn.Pressed() {
+					copyBg = zenProgressTrack
+					copyFg = zenInk
+				} else if copyBtn.Hovered() {
+					copyBg = zenInputFill
+					copyFg = zenInk
+				}
+				copyBtn.Height(24).
+					Padding(0, 8).
+					Gap(4).
+					Radius(99).
+					Background(copyBg).
+					Border(1, zenBorderStrong).
+					Justify(mygoui.Center).
+					AlignItems(mygoui.Center).
+					Shrink(0).
+					Cursor(mygoui.CursorPointer).
+					Label(t.CopyLANShort).
+					Tooltip(primary).
+					Children(func() {
+						mygoui.Icon(c, iconCopy).Size(11, 11).TextColor(copyFg)
+						mygoui.Text(c, t.CopyLANShort).FontSize(11).FontWeight(600).TextColor(copyFg).NoWrap()
 					})
+				if copyBtn.Clicked() {
+					if err := a.writeClipboardText(primary, false); err != nil {
+						a.state.SetToast(t.CopyFailedPref+err.Error(), true)
+					} else {
+						a.state.SetToast(t.LANAddrCopiedToast, false)
+					}
 				}
 			}
 		})
@@ -1031,53 +1425,7 @@ func (a *App) renderSettingsNetworkTab(c *mygoui.Context, snap ViewSnapshot, t u
 						})
 				}
 
-				mygoui.Box(c).Height(1).FillWidth().Background(zenBorder)
-
-				mygoui.Column(c).Gap(6).FillWidth().Children(func() {
-					mygoui.Column(c).Gap(2).FillWidth().Children(func() {
-						mygoui.Text(c, t.PeerDirectIPsLabel).FontSize(12).FontWeight(600).TextColor(zenInk)
-						mygoui.Text(c, t.PeerDirectIPHint).FontSize(11).TextColor(zenInkMuted).Wrap()
-					})
-
-					var remoteDevs []model.Device
-					for _, dev := range snap.Devices {
-						if dev.Revoked {
-							continue
-						}
-						if dev.IsSelf || (snap.Identity.DeviceID != "" && dev.DeviceID == snap.Identity.DeviceID) {
-							continue
-						}
-						remoteDevs = append(remoteDevs, dev)
-					}
-
-					if len(remoteDevs) == 0 {
-						mygoui.Text(c, t.NoPeersForDirect).FontSize(11.5).TextColor(zenInkMuted).Wrap()
-					} else {
-						for _, dev := range remoteDevs {
-							name := dev.Name
-							if name == "" {
-								name = shortID(dev.DeviceID)
-							}
-							placeholder := t.PeerDirectEmptyPlace
-							if len(dev.DirectAddrs) > 0 {
-								placeholder = fmt.Sprintf(t.PeerDirectAutoPlaceF, dev.DirectAddrs[0])
-							}
-							mygoui.Row(c.Key("set-peer-row-"+dev.DeviceID)).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
-								mygoui.Text(c, name).
-									FontSize(12).
-									FontWeight(500).
-									TextColor(zenInk).
-									Width(116).
-									SingleLine().
-									Tooltip(name + " (" + shortID(dev.DeviceID) + ")")
-								mygoui.TextInput(c.Key("set-peer-direct-"+dev.DeviceID), a.settingsDraft.PeerDirectAddrPtr(dev.DeviceID)).
-									Placeholder(placeholder).
-									Label(name).
-									Grow(1)
-							})
-						}
-					}
-				})
+				mygoui.Text(c, t.SettingsPeerIPMovedHint).FontSize(11).TextColor(zenInkMuted).Wrap()
 			})
 
 			// Card 2: DERP Relay fallback server card.

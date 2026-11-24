@@ -30,6 +30,9 @@ type ViewSnapshot struct {
 	ToastIsErr       bool
 	ToastExpiresAt   time.Time
 	OnlineCount      int
+	HasCustomDirect  bool
+	HasLANDirect     bool
+	HasP2PDirect     bool
 	HasDirect        bool
 	HasDERP          bool
 	ConnectivityTxt  string
@@ -406,7 +409,9 @@ func (s *State) Snapshot() ViewSnapshot {
 
 	peers := make(map[string]model.PeerConnStatus, len(s.peers))
 	onlineCount := 0
-	hasDirect := false
+	hasCustomDirect := false
+	hasLANDirect := false
+	hasP2PDirect := false
 	hasDERP := false
 	for id, p := range s.peers {
 		peers[id] = p
@@ -416,13 +421,18 @@ func (s *State) Snapshot() ViewSnapshot {
 		if p.Connected {
 			onlineCount++
 			switch p.PathKind {
+			case model.ConnPathCustomDirect:
+				hasCustomDirect = true
+			case model.ConnPathLAN:
+				hasLANDirect = true
 			case model.ConnPathDirect:
-				hasDirect = true
+				hasP2PDirect = true
 			case model.ConnPathDERP:
 				hasDERP = true
 			}
 		}
 	}
+	hasDirect := hasCustomDirect || hasLANDirect || hasP2PDirect
 
 	transfers := make(map[string]model.TransferTask, len(s.transfers))
 	for k, v := range s.transfers {
@@ -430,7 +440,7 @@ func (s *State) Snapshot() ViewSnapshot {
 	}
 
 	loc := ResolveLocale(s.config.Language)
-	connTxt := formatConnectivityLabel(loc, onlineCount, hasDirect, hasDERP)
+	connTxt := formatConnectivityLabel(loc, onlineCount, hasCustomDirect, hasLANDirect, hasP2PDirect, hasDERP)
 
 	toastTxt := s.toastText
 	toastErr := s.toastIsErr
@@ -460,6 +470,9 @@ func (s *State) Snapshot() ViewSnapshot {
 		ToastIsErr:       toastErr,
 		ToastExpiresAt:   s.toastExpiresAt,
 		OnlineCount:      onlineCount,
+		HasCustomDirect:  hasCustomDirect,
+		HasLANDirect:     hasLANDirect,
+		HasP2PDirect:     hasP2PDirect,
 		HasDirect:        hasDirect,
 		HasDERP:          hasDERP,
 		ConnectivityTxt:  connTxt,
@@ -531,16 +544,25 @@ func (s *State) DismissUpdate() {
 	}
 }
 
-func formatConnectivityLabel(loc Locale, onlineCount int, hasDirect, hasDERP bool) string {
+func formatConnectivityLabel(loc Locale, onlineCount int, hasCustomDirect, hasLANDirect, hasP2PDirect, hasDERP bool) string {
 	t := tr(loc)
 	if onlineCount == 0 {
 		return t.ConnOffline
 	}
-	if hasDirect && hasDERP {
-		return fmt.Sprintf(t.ConnDirectDERPF, onlineCount)
+	directLabel := ""
+	switch {
+	case hasLANDirect:
+		directLabel = t.LANDirect
+	case hasCustomDirect:
+		directLabel = t.CustomDirect
+	case hasP2PDirect:
+		directLabel = t.P2PDirect
 	}
-	if hasDirect {
-		return fmt.Sprintf(t.ConnDirectF, onlineCount)
+	if directLabel != "" && hasDERP {
+		return fmt.Sprintf(t.ConnModeDERPF, onlineCount, directLabel)
+	}
+	if directLabel != "" {
+		return fmt.Sprintf(t.ConnModeF, onlineCount, directLabel)
 	}
 	return fmt.Sprintf(t.ConnDERPF, onlineCount)
 }
@@ -894,6 +916,57 @@ func (s *State) ApplySettings(ctx context.Context, cfg model.AppConfig, hotSwitc
 		s.SetToast(t.ToastSettingsSaved, false)
 	}
 	return nil
+}
+
+// SetPeerDirectAddr sets or clears (when rawAddr is blank) a single peer's custom direct TCP address,
+// persists AppConfig without disturbing other settings, and triggers live transport reconfiguration.
+func (s *State) SetPeerDirectAddr(ctx context.Context, deviceID, rawAddr string) (string, error) {
+	t := tr(s.Locale())
+	devID := strings.TrimSpace(deviceID)
+	if devID == "" {
+		return "", fmt.Errorf("missing device id")
+	}
+
+	norm, err := model.NormalizeDirectAddr(rawAddr, model.DefaultDirectPort)
+	if err != nil {
+		return "", fmt.Errorf("%s", t.ErrInvalidPeerDirect)
+	}
+
+	cfg := s.api.Config().Clone()
+	if norm == "" {
+		if cfg.PeerDirectAddrs != nil {
+			delete(cfg.PeerDirectAddrs, devID)
+			if len(cfg.PeerDirectAddrs) == 0 {
+				cfg.PeerDirectAddrs = nil
+			}
+		}
+	} else {
+		if cfg.PeerDirectAddrs == nil {
+			cfg.PeerDirectAddrs = make(map[string]string, 1)
+		}
+		cfg.PeerDirectAddrs[devID] = norm
+	}
+
+	if err := s.api.UpdateConfig(ctx, cfg); err != nil {
+		s.SetToast(t.ToastSaveFailPref+err.Error(), true)
+		return "", err
+	}
+
+	newCfg := s.api.Config()
+	localDirect := s.fetchLocalDirectAddrs()
+	s.mu.Lock()
+	s.config = newCfg.Clone()
+	s.localDirectAddrs = localDirect
+	s.mu.Unlock()
+	s.notifyConfigChanged(newCfg.Clone())
+
+	t = tr(ResolveLocale(newCfg.Language))
+	if norm == "" {
+		s.SetToast(t.DeviceDirectCleared, false)
+	} else {
+		s.SetToast(fmt.Sprintf(t.DeviceDirectSavedF, norm), false)
+	}
+	return norm, nil
 }
 
 func sortMessagesAsc(msgs []model.Message) {
