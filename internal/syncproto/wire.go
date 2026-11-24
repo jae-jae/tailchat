@@ -46,6 +46,7 @@ type HelloPayload struct {
 	Route          model.RouteRecord `json:"route"`
 	VectorClock    model.VectorClock `json:"vector_clock"`
 	MemberEventIDs []string          `json:"member_event_ids,omitempty"`
+	DirectAddrs    []string          `json:"direct_addrs,omitempty"`
 	IsReply        bool              `json:"is_reply,omitempty"`
 }
 

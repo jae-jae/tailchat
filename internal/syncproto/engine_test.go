@@ -613,20 +613,25 @@ func (n *memNetwork) reconcileConnectivity() {
 type memTransport struct {
 	net *memNetwork
 
-	mu            sync.RWMutex
-	id            model.LocalIdentity
-	route         model.RouteRecord
-	online        bool
-	closed        bool
-	allowed       map[string]model.Device
-	revoked       map[string]bool
-	streamHandler  model.PeerStreamHandler
-	statusHandler  func(model.PeerConnStatus)
-	pairHandler    model.PairingHandler
-	pairPort       uint16
-	failChunkOpens atomic.Int32
-	zombieSession  atomic.Bool
-	sessionResets  atomic.Int32
+	mu                   sync.RWMutex
+	id                   model.LocalIdentity
+	route                model.RouteRecord
+	online               bool
+	closed               bool
+	allowed              map[string]model.Device
+	revoked              map[string]bool
+	streamHandler        model.PeerStreamHandler
+	statusHandler        func(model.PeerConnStatus)
+	pairHandler          model.PairingHandler
+	pairPort             uint16
+	failChunkOpens       atomic.Int32
+	zombieSession        atomic.Bool
+	sessionResets        atomic.Int32
+	directListenPort     int
+	directOverrides      map[string]string
+	directLearned        map[string][]string
+	localDirectAddrs     []string
+	configureDirectCalls int
 }
 
 func newMemTransport(net *memNetwork) *memTransport {
@@ -635,6 +640,31 @@ func newMemTransport(net *memNetwork) *memTransport {
 		allowed: make(map[string]model.Device),
 		revoked: make(map[string]bool),
 	}
+}
+
+func (t *memTransport) ConfigureDirect(listenPort int, peerOverrides map[string]string, learnedAddrs map[string][]string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.directListenPort = listenPort
+	t.configureDirectCalls++
+	t.directOverrides = make(map[string]string, len(peerOverrides))
+	for k, v := range peerOverrides {
+		t.directOverrides[k] = v
+	}
+	t.directLearned = make(map[string][]string, len(learnedAddrs))
+	for k, v := range learnedAddrs {
+		t.directLearned[k] = append([]string(nil), v...)
+	}
+	return nil
+}
+
+func (t *memTransport) LocalDirectAddrs() []string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.directListenPort <= 0 {
+		return nil
+	}
+	return append([]string(nil), t.localDirectAddrs...)
 }
 
 func (t *memTransport) canConnectToLocked(peerID string) bool {
@@ -2136,6 +2166,149 @@ func TestDownloadReclaimsVerifiedLocalCASChunks(t *testing.T) {
 	got, err := os.ReadFile(blobAfter.LocalPath)
 	if err != nil || !bytes.Equal(got, payload) {
 		t.Fatalf("assembled payload mismatch: err=%v len=%d want=%d", err, len(got), len(payload))
+	}
+}
+
+func TestDirectAddrsExchangeAndListDevicesHydration(t *testing.T) {
+	net := newMemNetwork()
+	ctx := context.Background()
+
+	a := newRealStoreTestNode(t, net, "NodeA", 0)
+	b := newRealStoreTestNode(t, net, "NodeB", 0)
+
+	// Advertise distinct LAN addresses on A and B.
+	a.tr.mu.Lock()
+	a.tr.localDirectAddrs = []string{"192.168.1.10:19840"}
+	a.tr.mu.Unlock()
+	b.tr.mu.Lock()
+	b.tr.localDirectAddrs = []string{"192.168.1.20:19840"}
+	b.tr.mu.Unlock()
+
+	code, _, err := a.svc.CreatePairingCode(ctx, 60)
+	if err != nil {
+		t.Fatalf("A.CreatePairingCode: %v", err)
+	}
+	if err := b.svc.JoinWithPairingCode(ctx, code); err != nil {
+		t.Fatalf("B.JoinWithPairingCode: %v", err)
+	}
+
+	aID := a.svc.Identity().DeviceID
+	bID := b.svc.Identity().DeviceID
+
+	// Wait for Hello exchange to learn each peer's DirectAddrs and push them to transport.ConfigureDirect.
+	waitUntil(t, 4*time.Second, "A learns B LAN addr", func() bool {
+		a.tr.mu.RLock()
+		defer a.tr.mu.RUnlock()
+		addrs := a.tr.directLearned[bID]
+		return len(addrs) == 1 && addrs[0] == "192.168.1.20:19840"
+	})
+	waitUntil(t, 4*time.Second, "B learns A LAN addr", func() bool {
+		b.tr.mu.RLock()
+		defer b.tr.mu.RUnlock()
+		addrs := b.tr.directLearned[aID]
+		return len(addrs) == 1 && addrs[0] == "192.168.1.10:19840"
+	})
+
+	// Verify ListDevices hydrates DirectAddrs for both self and peer without affecting signed RouteRecord.
+	devsA, err := a.svc.ListDevices(false)
+	if err != nil {
+		t.Fatalf("A.ListDevices: %v", err)
+	}
+	var sawSelf, sawPeer bool
+	for _, dev := range devsA {
+		if !model.VerifyRouteRecord(dev.Route) {
+			t.Fatalf("RouteRecord signature failed verification for %s", dev.DeviceID)
+		}
+		if dev.DeviceID == aID {
+			sawSelf = true
+			if len(dev.DirectAddrs) != 1 || dev.DirectAddrs[0] != "192.168.1.10:19840" {
+				t.Fatalf("A self DirectAddrs = %v, want [192.168.1.10:19840]", dev.DirectAddrs)
+			}
+		}
+		if dev.DeviceID == bID {
+			sawPeer = true
+			if len(dev.DirectAddrs) != 1 || dev.DirectAddrs[0] != "192.168.1.20:19840" {
+				t.Fatalf("A peer B DirectAddrs = %v, want [192.168.1.20:19840]", dev.DirectAddrs)
+			}
+		}
+	}
+	if !sawSelf || !sawPeer {
+		t.Fatalf("expected both self and peer in ListDevices; sawSelf=%v sawPeer=%v", sawSelf, sawPeer)
+	}
+}
+
+func TestUpdateConfigDirectSettingsValidationAndPersistence(t *testing.T) {
+	net := newMemNetwork()
+	ctx := context.Background()
+
+	a := newRealStoreTestNode(t, net, "NodeA", 0)
+
+	// Default DirectListenPort must be 19840 on startup.
+	initCfg := a.svc.Config()
+	if initCfg.EffectiveDirectListenPort() != model.DefaultDirectPort {
+		t.Fatalf("default EffectiveDirectListenPort = %d, want %d", initCfg.EffectiveDirectListenPort(), model.DefaultDirectPort)
+	}
+	a.tr.mu.RLock()
+	gotInitPort := a.tr.directListenPort
+	a.tr.mu.RUnlock()
+	if gotInitPort != model.DefaultDirectPort {
+		t.Fatalf("transport initial directListenPort = %d, want %d", gotInitPort, model.DefaultDirectPort)
+	}
+
+	// Update direct port + custom peer IP (bare IPv4 should normalize with default port 19840).
+	cfg := initCfg.Clone()
+	cfg.DirectListenPort = 20001
+	cfg.PeerDirectAddrs = map[string]string{
+		"peer-lan-1": "192.168.1.99",
+		"peer-lan-2": "[fd00::5]:21000",
+	}
+	if err := a.svc.UpdateConfig(ctx, cfg); err != nil {
+		t.Fatalf("UpdateConfig valid direct settings failed: %v", err)
+	}
+
+	persisted := a.svc.Config()
+	if persisted.DirectListenPort != 20001 {
+		t.Fatalf("persisted DirectListenPort = %d, want 20001", persisted.DirectListenPort)
+	}
+	if persisted.PeerDirectAddrs["peer-lan-1"] != "192.168.1.99:19840" {
+		t.Fatalf("peer-lan-1 = %q, want 192.168.1.99:19840", persisted.PeerDirectAddrs["peer-lan-1"])
+	}
+	if persisted.PeerDirectAddrs["peer-lan-2"] != "[fd00::5]:21000" {
+		t.Fatalf("peer-lan-2 = %q, want [fd00::5]:21000", persisted.PeerDirectAddrs["peer-lan-2"])
+	}
+
+	a.tr.mu.RLock()
+	gotPort := a.tr.directListenPort
+	gotOverride1 := a.tr.directOverrides["peer-lan-1"]
+	a.tr.mu.RUnlock()
+	if gotPort != 20001 || gotOverride1 != "192.168.1.99:19840" {
+		t.Fatalf("transport ConfigureDirect not hot-applied: port=%d override1=%q", gotPort, gotOverride1)
+	}
+
+	// Disabling direct listener must pass port 0 to transport.
+	cfgDisable := persisted.Clone()
+	cfgDisable.DirectListenDisabled = true
+	if err := a.svc.UpdateConfig(ctx, cfgDisable); err != nil {
+		t.Fatalf("UpdateConfig disable direct failed: %v", err)
+	}
+	a.tr.mu.RLock()
+	gotDisabledPort := a.tr.directListenPort
+	a.tr.mu.RUnlock()
+	if gotDisabledPort != 0 {
+		t.Fatalf("expected directListenPort == 0 when disabled, got %d", gotDisabledPort)
+	}
+
+	// Reject invalid direct port & invalid custom peer address without corrupting saved config.
+	badPortCfg := persisted.Clone()
+	badPortCfg.DirectListenPort = 70000
+	if err := a.svc.UpdateConfig(ctx, badPortCfg); err == nil {
+		t.Fatalf("expected error for DirectListenPort=70000")
+	}
+
+	badAddrCfg := persisted.Clone()
+	badAddrCfg.PeerDirectAddrs["peer-lan-1"] = "http://192.168.1.99"
+	if err := a.svc.UpdateConfig(ctx, badAddrCfg); err == nil {
+		t.Fatalf("expected error for invalid custom peer address with scheme")
 	}
 }
 

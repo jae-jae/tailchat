@@ -39,8 +39,9 @@ type mockAppAPI struct {
 	lastSearch      string
 	cancelPairCnt   int
 	clearedAllCount int
-	resolvedHashes  []string
-	resolvePaths    map[string]string
+	resolvedHashes   []string
+	resolvePaths     map[string]string
+	localDirectAddrs []string
 }
 
 func newMockAppAPI() *mockAppAPI {
@@ -146,7 +147,16 @@ func (m *mockAppAPI) Identity() model.LocalIdentity {
 func (m *mockAppAPI) Config() model.AppConfig {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.config
+	return m.config.Clone()
+}
+
+func (m *mockAppAPI) LocalDirectAddrs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.config.DirectListenDisabled {
+		return nil
+	}
+	return append([]string(nil), m.localDirectAddrs...)
 }
 
 func (m *mockAppAPI) UpdateConfig(_ context.Context, cfg model.AppConfig) error {
@@ -1678,6 +1688,131 @@ func TestFailedFileCardShowsRetryDownloadButton(t *testing.T) {
 
 	if !tt.HasText("重试下载") {
 		t.Fatalf("expected failed file card to render 重试下载 CTA; texts: %v", tt.Texts())
+	}
+}
+
+func TestSettingsDraftDirectFieldsRoundTripAndValidation(t *testing.T) {
+	cfg := model.AppConfig{
+		DeviceName:           "Studio Mac",
+		Language:             model.LanguageChinese,
+		DERP:                 model.DefaultDERPConfig(),
+		DirectListenPort:     20042,
+		DirectListenDisabled: false,
+		PeerDirectAddrs: map[string]string{
+			"dev-peer-002": "192.168.1.42:19840",
+		},
+		AutoDownloadMaxBytes: 20 * 1024 * 1024,
+	}
+
+	draft := NewSettingsDraft(cfg)
+	if !draft.DirectListenEnabled || draft.DirectListenPortStr != "20042" {
+		t.Fatalf("unexpected draft direct listen fields: enabled=%v port=%q", draft.DirectListenEnabled, draft.DirectListenPortStr)
+	}
+	if got := *draft.PeerDirectAddrPtr("dev-peer-002"); got != "192.168.1.42:19840" {
+		t.Fatalf("PeerDirectAddrPtr(dev-peer-002) = %q, want 192.168.1.42:19840", got)
+	}
+
+	// Update custom IP (bare IPv4 -> should normalize with DefaultDirectPort) and add a blank entry (should be omitted).
+	*draft.PeerDirectAddrPtr("dev-peer-002") = "10.0.0.88"
+	*draft.PeerDirectAddrPtr("dev-peer-003") = "   "
+	draft.DirectListenPortStr = "19999"
+	draft.DirectListenEnabled = false
+
+	converted, err := draft.ToConfig()
+	if err != nil {
+		t.Fatalf("ToConfig valid draft failed: %v", err)
+	}
+	if converted.DirectListenPort != 19999 || !converted.DirectListenDisabled {
+		t.Fatalf("converted direct listen mismatch: port=%d disabled=%v", converted.DirectListenPort, converted.DirectListenDisabled)
+	}
+	if len(converted.PeerDirectAddrs) != 1 || converted.PeerDirectAddrs["dev-peer-002"] != "10.0.0.88:19840" {
+		t.Fatalf("converted PeerDirectAddrs = %v, want {dev-peer-002: 10.0.0.88:19840}", converted.PeerDirectAddrs)
+	}
+
+	// Invalid direct listen port.
+	badPortDraft := NewSettingsDraft(cfg)
+	badPortDraft.DirectListenPortStr = "70000"
+	if _, err := badPortDraft.ToConfig(); err == nil {
+		t.Fatalf("expected error for invalid DirectListenPortStr=70000")
+	}
+
+	// Invalid custom peer IP.
+	badAddrDraft := NewSettingsDraft(cfg)
+	*badAddrDraft.PeerDirectAddrPtr("dev-peer-002") = "http://192.168.1.42"
+	if _, err := badAddrDraft.ToConfig(); err == nil {
+		t.Fatalf("expected error for invalid custom peer address")
+	}
+}
+
+func TestSettingsNetworkTabDirectLANAndPopoverEndpoint(t *testing.T) {
+	api := newMockAppAPI()
+	api.localDirectAddrs = []string{"192.168.1.10:19840"}
+	api.devices[1].DirectAddrs = []string{"192.168.1.42:19840"}
+
+	state := NewState(api)
+	state.Start(context.Background())
+	t.Cleanup(state.Stop)
+
+	app := NewApp(state)
+	app.runAsync = func(fn func()) { fn() }
+	var copied string
+	app.writeClipboardText = func(text string, _ bool) error {
+		copied = text
+		return nil
+	}
+
+	tt := mygoui.NewTester(app.View, 540, 760)
+	tt.Frame()
+
+	// 1. Devices popover must show direct endpoint next to P2P 直连.
+	app.devicesPopoverOpen = true
+	tt.Frame()
+	if !tt.HasText("P2P 直连 · 192.168.1.42:41641 · 3.4 ms") {
+		t.Fatalf("expected Devices popover to show direct endpoint; texts: %v", tt.Texts())
+	}
+	app.devicesPopoverOpen = false
+	tt.Frame()
+
+	// 2. Open Settings -> Network tab and verify LAN Direct card & local address copy + custom peer IP save.
+	if err := tt.Click("设置与 DERP"); err != nil {
+		t.Fatalf("open settings: %v", err)
+	}
+	tt.Frame()
+	if err := tt.Click("网络"); err != nil {
+		t.Fatalf("switch to 网络 tab: %v", err)
+	}
+	tt.Frame()
+
+	if !tt.HasText("局域网 / 自定义直连") {
+		t.Fatalf("expected DirectConnTitle in Network tab; texts: %v", tt.Texts())
+	}
+	if !tt.HasText("192.168.1.10:19840") {
+		t.Fatalf("expected local LAN direct address in Network tab; texts: %v", tt.Texts())
+	}
+	if !tt.HasText("iPhone 16") {
+		t.Fatalf("expected paired device row iPhone 16 in Network tab; texts: %v", tt.Texts())
+	}
+
+	// Clicking Copy copies primary local LAN address to clipboard.
+	if err := tt.Click("复制"); err != nil {
+		t.Fatalf("click 复制 local LAN addr: %v", err)
+	}
+	tt.Frame()
+	if copied != "192.168.1.10:19840" {
+		t.Fatalf("copied LAN addr = %q, want 192.168.1.10:19840", copied)
+	}
+
+	// Simulate user typing a custom LAN IP for iPhone 16 and saving settings.
+	*app.settingsDraft.PeerDirectAddrPtr("dev-peer-002") = "192.168.50.8"
+	tt.Frame()
+	if err := tt.Click("保存设置"); err != nil {
+		t.Fatalf("click 保存设置: %v", err)
+	}
+	tt.Frame()
+
+	saved := api.Config()
+	if saved.PeerDirectAddrs["dev-peer-002"] != "192.168.50.8:19840" {
+		t.Fatalf("saved PeerDirectAddrs[dev-peer-002] = %q, want 192.168.50.8:19840", saved.PeerDirectAddrs["dev-peer-002"])
 	}
 }
 

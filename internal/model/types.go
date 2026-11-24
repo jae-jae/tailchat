@@ -5,6 +5,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -22,6 +26,8 @@ const (
 	DefaultMeshPort uint16 = 19840
 	// DefaultPairingPort is the Tailcat virtual TCP port used for short-lived pairing handshakes.
 	DefaultPairingPort uint16 = 19841
+	// DefaultDirectPort is the default TCP port for LAN / custom IP direct mTLS connections.
+	DefaultDirectPort = 19840
 )
 
 // DERPMode selects how a node bootstraps and relays Tailcat connections.
@@ -95,6 +101,7 @@ type Device struct {
 	AddedAt       int64       `json:"added_at"`
 	LastSeenAt    int64       `json:"last_seen_at"`
 	IsSelf        bool        `json:"is_self,omitempty"`
+	DirectAddrs   []string    `json:"direct_addrs,omitempty"` // Runtime auto-discovered LAN endpoints (not signed)
 }
 
 // MemberEventKind enumerates signed membership mutations replicated via gossip.
@@ -279,14 +286,97 @@ func NormalizeLanguage(lang string) string {
 
 // AppConfig holds user-editable runtime settings.
 type AppConfig struct {
-	DeviceName           string     `json:"device_name"`
-	Language             string     `json:"language,omitempty"` // "auto" (default, fallback en), "en", "zh"
-	DERP                 DERPConfig `json:"derp"`
-	AutoDownloadMaxBytes int64      `json:"auto_download_max_bytes"`
-	MaxDownloadBytesPerS int64      `json:"max_download_bytes_per_s"` // 0 = unlimited
-	DownloadDir          string     `json:"download_dir"`
-	MinimizeToTray       bool       `json:"minimize_to_tray"`
-	GlobalHotkey         string     `json:"global_hotkey"`
+	DeviceName           string            `json:"device_name"`
+	Language             string            `json:"language,omitempty"` // "auto" (default, fallback en), "en", "zh"
+	DERP                 DERPConfig        `json:"derp"`
+	DirectListenPort     int               `json:"direct_listen_port,omitempty"`     // 0 = DefaultDirectPort (19840)
+	DirectListenDisabled bool              `json:"direct_listen_disabled,omitempty"` // true disables LAN/custom TCP direct listener
+	PeerDirectAddrs      map[string]string `json:"peer_direct_addrs,omitempty"`      // deviceID -> custom host[:port]
+	AutoDownloadMaxBytes int64             `json:"auto_download_max_bytes"`
+	MaxDownloadBytesPerS int64             `json:"max_download_bytes_per_s"` // 0 = unlimited
+	DownloadDir          string            `json:"download_dir"`
+	MinimizeToTray       bool              `json:"minimize_to_tray"`
+	GlobalHotkey         string            `json:"global_hotkey"`
+}
+
+// Clone returns a deep copy of AppConfig safe for concurrent access across goroutines.
+func (c AppConfig) Clone() AppConfig {
+	out := c
+	if len(c.PeerDirectAddrs) > 0 {
+		out.PeerDirectAddrs = make(map[string]string, len(c.PeerDirectAddrs))
+		for k, v := range c.PeerDirectAddrs {
+			out.PeerDirectAddrs[k] = v
+		}
+	} else {
+		out.PeerDirectAddrs = nil
+	}
+	return out
+}
+
+// EffectiveDirectListenPort returns the active TCP port for direct mTLS connections,
+// or 0 if direct listening is explicitly disabled.
+func (c AppConfig) EffectiveDirectListenPort() int {
+	if c.DirectListenDisabled {
+		return 0
+	}
+	if c.DirectListenPort > 0 && c.DirectListenPort <= 65535 {
+		return c.DirectListenPort
+	}
+	return DefaultDirectPort
+}
+
+// NormalizeDirectAddr validates and canonicalizes a user-configured or peer-announced
+// direct TCP address into "host:port". Empty input returns ("", nil).
+// Supported formats: "192.168.1.5", "192.168.1.5:19840", "[fd00::1]:19840", "fd00::1",
+// "mac-mini.local", "mac-mini.local:29840".
+func NormalizeDirectAddr(raw string, defaultPort int) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", nil
+	}
+	if defaultPort <= 0 || defaultPort > 65535 {
+		defaultPort = DefaultDirectPort
+	}
+	if strings.ContainsAny(s, " \t\r\n/\\@") || strings.Contains(s, "://") {
+		return "", fmt.Errorf("invalid direct address %q", raw)
+	}
+
+	// Case 1: Pure IP literal (IPv4 or bare IPv6 without brackets/port).
+	if addr, err := netip.ParseAddr(s); err == nil {
+		return net.JoinHostPort(addr.Unmap().String(), strconv.Itoa(defaultPort)), nil
+	}
+
+	// Case 2: Bracketed IPv6 without port (e.g. "[fd00::1]").
+	if strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]") {
+		inner := s[1 : len(s)-1]
+		addr, err := netip.ParseAddr(inner)
+		if err != nil {
+			return "", fmt.Errorf("invalid IPv6 address %q", raw)
+		}
+		return net.JoinHostPort(addr.Unmap().String(), strconv.Itoa(defaultPort)), nil
+	}
+
+	// Case 3: host:port (IPv4:port, [IPv6]:port, hostname:port).
+	if host, portStr, err := net.SplitHostPort(s); err == nil {
+		host = strings.TrimSpace(host)
+		if host == "" {
+			return "", fmt.Errorf("missing host in direct address %q", raw)
+		}
+		port, err := strconv.Atoi(strings.TrimSpace(portStr))
+		if err != nil || port <= 0 || port > 65535 {
+			return "", fmt.Errorf("invalid port in direct address %q", raw)
+		}
+		if addr, err := netip.ParseAddr(host); err == nil {
+			host = addr.Unmap().String()
+		}
+		return net.JoinHostPort(host, strconv.Itoa(port)), nil
+	}
+
+	// Case 4: Bare hostname without port (reject stray colons or brackets).
+	if strings.ContainsAny(s, ":[]") {
+		return "", fmt.Errorf("invalid direct address %q", raw)
+	}
+	return net.JoinHostPort(s, strconv.Itoa(defaultPort)), nil
 }
 
 // ConnPathKind indicates whether traffic to a peer is direct UDP or DERP-relayed.

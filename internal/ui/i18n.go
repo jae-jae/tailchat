@@ -252,6 +252,18 @@ type uiStrings struct {
 	RegionName         string
 	CustomNodePlace    string
 	ApplyHotSwitchDERP string
+	DirectConnTitle       string
+	DirectConnHint        string
+	DirectListenEnable    string
+	DirectListenPort      string
+	LocalLANAddrsLabel    string
+	CopyLANAddr           string
+	LANAddrCopiedToast    string
+	PeerDirectIPsLabel    string
+	PeerDirectIPHint      string
+	PeerDirectAutoPlaceF  string
+	PeerDirectEmptyPlace  string
+	NoPeersForDirect      string
 	AutoDownloadMB     string
 	DownloadLimitKBs   string
 	TransferPolicyHint string
@@ -267,13 +279,15 @@ type uiStrings struct {
 	SaveSettings       string
 
 	// Settings validation errors
-	ErrInvalidRegionID string
-	ErrInvalidDERPPort string
-	ErrInvalidSTUNPort string
-	ErrInvalidAutoDL   string
-	ErrInvalidRateLim  string
-	ErrNeedCustomHost  string
-	ErrNeedDERPMapURL  string
+	ErrInvalidRegionID    string
+	ErrInvalidDERPPort    string
+	ErrInvalidSTUNPort    string
+	ErrInvalidDirectPort  string
+	ErrInvalidDirectAddrF string
+	ErrInvalidAutoDL      string
+	ErrInvalidRateLim     string
+	ErrNeedCustomHost     string
+	ErrNeedDERPMapURL     string
 
 	// State toasts & errors
 	ConnOffline         string
@@ -476,28 +490,42 @@ var stringsEN = uiStrings{
 	STUNPort:           "STUN port",
 	RegionName:         "Region name",
 	CustomNodePlace:    "Custom node",
-	ApplyHotSwitchDERP: "Apply & Hot-Switch DERP",
-	AutoDownloadMB:     "Auto-download (MB)",
-	DownloadLimitKBs:   "Speed limit (KB/s)",
-	TransferPolicyHint: "Files above the threshold wait for manual download; 0 = unlimited speed.",
-	MinimizeToTray:     "Minimize to tray when closing window",
-	ClearHistoryTitle:  "Clear All Chat History",
-	ClearHistoryNote:   "Clears chat history across all paired devices; local files stay intact",
-	ClearAllBtn:        "Clear All",
-	ClearConfirmTitle:  "Clear all chat history?",
-	ClearConfirmBody:   "This will sync and clear chat history on this device and all paired devices, while keeping locally saved files.",
-	ClearConfirmOK:     "Clear All",
-	AppTagline:         "Private P2P Device Mesh",
-	GitHubRepoLabel:    "GitHub",
-	SaveSettings:       "Save",
+	ApplyHotSwitchDERP:    "Apply & Hot-Switch DERP",
+	DirectConnTitle:       "LAN & Custom Direct",
+	DirectConnHint:        "Tries encrypted direct TCP first (Custom IP > Auto LAN), falling back to DERP seamlessly.",
+	DirectListenEnable:    "Listen for direct connections",
+	DirectListenPort:      "Port",
+	LocalLANAddrsLabel:    "This device LAN:",
+	CopyLANAddr:           "Copy",
+	LANAddrCopiedToast:    "Local direct address copied",
+	PeerDirectIPsLabel:    "Custom Peer IP (optional)",
+	PeerDirectIPHint:      "Leave blank for auto LAN discovery. Supports IP or IP:port (default 19840).",
+	PeerDirectAutoPlaceF:  "Auto: %s",
+	PeerDirectEmptyPlace:  "e.g. 192.168.1.10",
+	NoPeersForDirect:      "Pair another device first to configure custom direct IPs.",
+	AutoDownloadMB:        "Auto-download (MB)",
+	DownloadLimitKBs:      "Speed limit (KB/s)",
+	TransferPolicyHint:    "Files above the threshold wait for manual download; 0 = unlimited speed.",
+	MinimizeToTray:        "Minimize to tray when closing window",
+	ClearHistoryTitle:     "Clear All Chat History",
+	ClearHistoryNote:      "Clears chat history across all paired devices; local files stay intact",
+	ClearAllBtn:           "Clear All",
+	ClearConfirmTitle:     "Clear all chat history?",
+	ClearConfirmBody:      "This will sync and clear chat history on this device and all paired devices, while keeping locally saved files.",
+	ClearConfirmOK:        "Clear All",
+	AppTagline:            "Private P2P Device Mesh",
+	GitHubRepoLabel:       "GitHub",
+	SaveSettings:          "Save",
 
-	ErrInvalidRegionID: "Invalid Region ID",
-	ErrInvalidDERPPort: "Invalid DERP port",
-	ErrInvalidSTUNPort: "Invalid STUN port",
-	ErrInvalidAutoDL:   "Invalid auto-download threshold (MB)",
-	ErrInvalidRateLim:  "Invalid download speed limit (KB/s)",
-	ErrNeedCustomHost:  "Please enter a self-hosted derper hostname or IP",
-	ErrNeedDERPMapURL:  "Please enter a custom DERPMap URL",
+	ErrInvalidRegionID:    "Invalid Region ID",
+	ErrInvalidDERPPort:    "Invalid DERP port",
+	ErrInvalidSTUNPort:    "Invalid STUN port",
+	ErrInvalidDirectPort:  "Invalid direct listen port (1–65535)",
+	ErrInvalidDirectAddrF: "Invalid direct address (%s): %s",
+	ErrInvalidAutoDL:      "Invalid auto-download threshold (MB)",
+	ErrInvalidRateLim:     "Invalid download speed limit (KB/s)",
+	ErrNeedCustomHost:     "Please enter a self-hosted derper hostname or IP",
+	ErrNeedDERPMapURL:     "Please enter a custom DERPMap URL",
 
 	ConnOffline:         "Offline · Waiting for peers",
 	ConnDirectDERPF:     "%d online · P2P Direct + DERP",
@@ -696,28 +724,42 @@ var stringsZH = uiStrings{
 	STUNPort:           "STUN 端口",
 	RegionName:         "区域名称",
 	CustomNodePlace:    "自建节点",
-	ApplyHotSwitchDERP: "应用并热切 DERP",
-	AutoDownloadMB:     "自动下载阈值 (MB)",
-	DownloadLimitKBs:   "下载限速 (KB/s)",
-	TransferPolicyHint: "超过阈值的文件需手动点击下载；限速填 0 表示不限速。",
-	MinimizeToTray:     "关闭窗口时最小化到托盘",
-	ClearHistoryTitle:  "清空所有聊天记录",
-	ClearHistoryNote:   "同步清空所有配对设备的聊天记录，本地文件不受影响",
-	ClearAllBtn:        "一键清空",
-	ClearConfirmTitle:  "确认清空所有聊天记录？",
-	ClearConfirmBody:   "此操作将同步清空当前设备及所有已配对设备的聊天记录，但会保留本地已保存的文件。",
-	ClearConfirmOK:     "确认清空",
-	AppTagline:         "私有 P2P 设备互联",
-	GitHubRepoLabel:    "GitHub",
-	SaveSettings:       "保存设置",
+	ApplyHotSwitchDERP:    "应用并热切 DERP",
+	DirectConnTitle:       "局域网 / 自定义直连",
+	DirectConnHint:        "优先尝试加密直连（自定义 IP > 自动发现局域网 IP），不可达时自动无缝回退至 DERP 中继。",
+	DirectListenEnable:    "启用局域网/自定义直连监听",
+	DirectListenPort:      "端口",
+	LocalLANAddrsLabel:    "本机局域网地址：",
+	CopyLANAddr:           "复制",
+	LANAddrCopiedToast:    "已复制本机直连地址",
+	PeerDirectIPsLabel:    "设备自定义直连 IP（可选）",
+	PeerDirectIPHint:      "留空则自动发现；支持填写 IP 或 IP:端口（默认 19840）。",
+	PeerDirectAutoPlaceF:  "自动：%s",
+	PeerDirectEmptyPlace:  "如 192.168.1.10",
+	NoPeersForDirect:      "配对其他设备后，可在此为每台设备配置自定义直连 IP。",
+	AutoDownloadMB:        "自动下载阈值 (MB)",
+	DownloadLimitKBs:      "下载限速 (KB/s)",
+	TransferPolicyHint:    "超过阈值的文件需手动点击下载；限速填 0 表示不限速。",
+	MinimizeToTray:        "关闭窗口时最小化到托盘",
+	ClearHistoryTitle:     "清空所有聊天记录",
+	ClearHistoryNote:      "同步清空所有配对设备的聊天记录，本地文件不受影响",
+	ClearAllBtn:           "一键清空",
+	ClearConfirmTitle:     "确认清空所有聊天记录？",
+	ClearConfirmBody:      "此操作将同步清空当前设备及所有已配对设备的聊天记录，但会保留本地已保存的文件。",
+	ClearConfirmOK:        "确认清空",
+	AppTagline:            "私有 P2P 设备互联",
+	GitHubRepoLabel:       "GitHub",
+	SaveSettings:          "保存设置",
 
-	ErrInvalidRegionID: "Region ID 无效",
-	ErrInvalidDERPPort: "DERP 端口无效",
-	ErrInvalidSTUNPort: "STUN 端口无效",
-	ErrInvalidAutoDL:   "自动下载阈值 (MB) 无效",
-	ErrInvalidRateLim:  "下载限速 (KB/s) 无效",
-	ErrNeedCustomHost:  "请输入自建 derper 服务器域名或 IP",
-	ErrNeedDERPMapURL:  "请输入自定义 DERPMap URL",
+	ErrInvalidRegionID:    "Region ID 无效",
+	ErrInvalidDERPPort:    "DERP 端口无效",
+	ErrInvalidSTUNPort:    "STUN 端口无效",
+	ErrInvalidDirectPort:  "直连监听端口无效（1–65535）",
+	ErrInvalidDirectAddrF: "直连地址无效（%s）：%s",
+	ErrInvalidAutoDL:      "自动下载阈值 (MB) 无效",
+	ErrInvalidRateLim:     "下载限速 (KB/s) 无效",
+	ErrNeedCustomHost:     "请输入自建 derper 服务器域名或 IP",
+	ErrNeedDERPMapURL:     "请输入自定义 DERPMap URL",
 
 	ConnOffline:         "离线 · 等待设备连接",
 	ConnDirectDERPF:     "%d 台设备在线 · P2P 直连 + DERP",

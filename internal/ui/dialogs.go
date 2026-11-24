@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,20 +18,37 @@ const tailchatGitHubURL = "https://github.com/jae-jae/tailchat"
 
 // SettingsDraft holds editable form fields for the Settings modal.
 type SettingsDraft struct {
-	DeviceName        string
-	LanguageIdx       int // 0: auto, 1: en, 2: zh
-	DERPModeIdx       int // 0: default_tailcat, 1: custom_region, 2: custom_map_url
-	RegionIDStr       string
-	CustomHost        string
-	CustomDERPPortStr string
-	CustomSTUNPortStr string
-	CustomRegionName  string
-	DERPMapURL        string
-	AutoDownloadMBStr string
-	RateLimitKBsStr   string
-	MinimizeToTray    bool
-	GlobalHotkey      string
-	DownloadDir       string
+	DeviceName          string
+	LanguageIdx         int // 0: auto, 1: en, 2: zh
+	DERPModeIdx         int // 0: default_tailcat, 1: custom_region, 2: custom_map_url
+	RegionIDStr         string
+	CustomHost          string
+	CustomDERPPortStr   string
+	CustomSTUNPortStr   string
+	CustomRegionName    string
+	DERPMapURL          string
+	DirectListenEnabled bool
+	DirectListenPortStr string
+	PeerDirectAddrs     map[string]*string
+	AutoDownloadMBStr   string
+	RateLimitKBsStr     string
+	MinimizeToTray      bool
+	GlobalHotkey        string
+	DownloadDir         string
+}
+
+// PeerDirectAddrPtr returns a stable heap pointer to the editable custom direct address
+// string for deviceID so mygoui.TextInput bindings remain valid across frames.
+func (d *SettingsDraft) PeerDirectAddrPtr(deviceID string) *string {
+	if d.PeerDirectAddrs == nil {
+		d.PeerDirectAddrs = make(map[string]*string)
+	}
+	if ptr, ok := d.PeerDirectAddrs[deviceID]; ok && ptr != nil {
+		return ptr
+	}
+	s := ""
+	d.PeerDirectAddrs[deviceID] = &s
+	return &s
 }
 
 // SelectedLanguage returns the model.Language* constant corresponding to LanguageIdx.
@@ -84,25 +102,38 @@ func NewSettingsDraft(cfg model.AppConfig) SettingsDraft {
 	if regionID == 0 {
 		regionID = 304
 	}
+	directPort := cfg.DirectListenPort
+	if directPort <= 0 {
+		directPort = model.DefaultDirectPort
+	}
+
+	peerDirect := make(map[string]*string, len(cfg.PeerDirectAddrs))
+	for devID, addr := range cfg.PeerDirectAddrs {
+		val := strings.TrimSpace(addr)
+		peerDirect[devID] = &val
+	}
 
 	autoMB := cfg.AutoDownloadMaxBytes / (1024 * 1024)
 	rateKBs := cfg.MaxDownloadBytesPerS / 1024
 
 	return SettingsDraft{
-		DeviceName:        cfg.DeviceName,
-		LanguageIdx:       langIdx,
-		DERPModeIdx:       modeIdx,
-		RegionIDStr:       strconv.Itoa(regionID),
-		CustomHost:        cfg.DERP.CustomHost,
-		CustomDERPPortStr: strconv.Itoa(derpPort),
-		CustomSTUNPortStr: strconv.Itoa(stunPort),
-		CustomRegionName:  cfg.DERP.CustomRegionName,
-		DERPMapURL:        cfg.DERP.DERPMapURL,
-		AutoDownloadMBStr: strconv.FormatInt(autoMB, 10),
-		RateLimitKBsStr:   strconv.FormatInt(rateKBs, 10),
-		MinimizeToTray:    cfg.MinimizeToTray,
-		GlobalHotkey:      cfg.GlobalHotkey,
-		DownloadDir:       strings.TrimSpace(cfg.DownloadDir),
+		DeviceName:          cfg.DeviceName,
+		LanguageIdx:         langIdx,
+		DERPModeIdx:         modeIdx,
+		RegionIDStr:         strconv.Itoa(regionID),
+		CustomHost:          cfg.DERP.CustomHost,
+		CustomDERPPortStr:   strconv.Itoa(derpPort),
+		CustomSTUNPortStr:   strconv.Itoa(stunPort),
+		CustomRegionName:    cfg.DERP.CustomRegionName,
+		DERPMapURL:          cfg.DERP.DERPMapURL,
+		DirectListenEnabled: !cfg.DirectListenDisabled,
+		DirectListenPortStr: strconv.Itoa(directPort),
+		PeerDirectAddrs:     peerDirect,
+		AutoDownloadMBStr:   strconv.FormatInt(autoMB, 10),
+		RateLimitKBsStr:     strconv.FormatInt(rateKBs, 10),
+		MinimizeToTray:      cfg.MinimizeToTray,
+		GlobalHotkey:        cfg.GlobalHotkey,
+		DownloadDir:         strings.TrimSpace(cfg.DownloadDir),
 	}
 }
 
@@ -122,6 +153,10 @@ func (d SettingsDraft) ToConfig() (model.AppConfig, error) {
 	if err != nil || stunPort <= 0 || stunPort > 65535 {
 		return model.AppConfig{}, fmt.Errorf("%s", t.ErrInvalidSTUNPort)
 	}
+	directPort, err := parseIntDefault(d.DirectListenPortStr, model.DefaultDirectPort)
+	if err != nil || directPort <= 0 || directPort > 65535 {
+		return model.AppConfig{}, fmt.Errorf("%s", t.ErrInvalidDirectPort)
+	}
 	autoMB, err := parseInt64Default(d.AutoDownloadMBStr, 20)
 	if err != nil || autoMB < 0 {
 		return model.AppConfig{}, fmt.Errorf("%s", t.ErrInvalidAutoDL)
@@ -129,6 +164,33 @@ func (d SettingsDraft) ToConfig() (model.AppConfig, error) {
 	rateKBs, err := parseInt64Default(d.RateLimitKBsStr, 0)
 	if err != nil || rateKBs < 0 {
 		return model.AppConfig{}, fmt.Errorf("%s", t.ErrInvalidRateLim)
+	}
+
+	var peerDirect map[string]string
+	if len(d.PeerDirectAddrs) > 0 {
+		devIDs := make([]string, 0, len(d.PeerDirectAddrs))
+		for devID := range d.PeerDirectAddrs {
+			devIDs = append(devIDs, devID)
+		}
+		sort.Strings(devIDs)
+		for _, devID := range devIDs {
+			ptr := d.PeerDirectAddrs[devID]
+			if ptr == nil {
+				continue
+			}
+			raw := strings.TrimSpace(*ptr)
+			if raw == "" {
+				continue
+			}
+			norm, normErr := model.NormalizeDirectAddr(raw, model.DefaultDirectPort)
+			if normErr != nil {
+				return model.AppConfig{}, fmt.Errorf(t.ErrInvalidDirectAddrF, shortID(devID), normErr.Error())
+			}
+			if peerDirect == nil {
+				peerDirect = make(map[string]string)
+			}
+			peerDirect[devID] = norm
+		}
 	}
 
 	derpCfg := model.DERPConfig{
@@ -162,6 +224,9 @@ func (d SettingsDraft) ToConfig() (model.AppConfig, error) {
 		DeviceName:           strings.TrimSpace(d.DeviceName),
 		Language:             d.SelectedLanguage(),
 		DERP:                 derpCfg,
+		DirectListenPort:     directPort,
+		DirectListenDisabled: !d.DirectListenEnabled,
+		PeerDirectAddrs:      peerDirect,
 		AutoDownloadMaxBytes: autoMB * 1024 * 1024,
 		MaxDownloadBytesPerS: rateKBs * 1024,
 		DownloadDir:          strings.TrimSpace(d.DownloadDir),
@@ -679,6 +744,9 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 		switch peer.PathKind {
 		case model.ConnPathDirect:
 			subtitle = t.P2PDirect
+			if peer.Endpoint != "" {
+				subtitle += " · " + peer.Endpoint
+			}
 			subColor = zenDirectText
 			statusColor = zenDirect
 		case model.ConnPathDERP:
@@ -797,7 +865,7 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 				a.renderSettingsTransferTab(c, t)
 				a.renderSettingsSaveFooter(c, t)
 			case 2:
-				a.renderSettingsNetworkTab(c, t)
+				a.renderSettingsNetworkTab(c, snap, t)
 				a.renderSettingsSaveFooter(c, t)
 			default:
 				a.renderSettingsAboutTab(c, snap, t)
@@ -908,66 +976,170 @@ func (a *App) renderSettingsTransferTab(c *mygoui.Context, t uiStrings) {
 	})
 }
 
-func (a *App) renderSettingsNetworkTab(c *mygoui.Context, t uiStrings) {
-	mygoui.Column(c).Gap(10).FillWidth().Children(func() {
-		settingsSectionCard(c, func() {
-			mygoui.Column(c).Gap(3).FillWidth().Children(func() {
-				mygoui.Text(c, t.DERPServer).FontSize(12.5).Bold().TextColor(zenInk)
-				mygoui.Text(c, t.DERPHint).FontSize(11).TextColor(zenInkMuted).Wrap()
+func (a *App) renderSettingsNetworkTab(c *mygoui.Context, snap ViewSnapshot, t uiStrings) {
+	mygoui.Scroll(c.Key("settings-net-scroll")).MaxHeight(390).FillWidth().Children(func() {
+		mygoui.Column(c).Gap(10).FillWidth().Children(func() {
+			// Card 1: LAN & Custom Direct TCP+mTLS card.
+			settingsSectionCard(c, func() {
+				mygoui.Column(c).Gap(3).FillWidth().Children(func() {
+					mygoui.Text(c, t.DirectConnTitle).FontSize(12.5).Bold().TextColor(zenInk)
+					mygoui.Text(c, t.DirectConnHint).FontSize(11).TextColor(zenInkMuted).Wrap()
+				})
+
+				mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
+					mygoui.Checkbox(c.Key("set-direct-enable"), &a.settingsDraft.DirectListenEnabled, t.DirectListenEnable)
+					mygoui.Spacer(c)
+					mygoui.Text(c, t.DirectListenPort).FontSize(11.5).TextColor(zenInkSecondary).NoWrap()
+					mygoui.TextInput(c.Key("set-direct-port"), &a.settingsDraft.DirectListenPortStr).
+						Placeholder("19840").
+						Label(t.DirectListenPort).
+						Width(78)
+				})
+
+				if a.settingsDraft.DirectListenEnabled && len(snap.LocalDirectAddrs) > 0 {
+					shown := snap.LocalDirectAddrs
+					if len(shown) > 2 {
+						shown = shown[:2]
+					}
+					summary := strings.Join(shown, ", ")
+					primary := snap.LocalDirectAddrs[0]
+					mygoui.Row(c).
+						Padding(6, 9).
+						Gap(8).
+						Radius(9).
+						Background(zenSurface).
+						Border(1, zenBorder).
+						AlignItems(mygoui.Center).
+						FillWidth().
+						Children(func() {
+							mygoui.Text(c, t.LocalLANAddrsLabel).FontSize(11).FontWeight(600).TextColor(zenInkSecondary).NoWrap()
+							mygoui.Text(c, summary).
+								FontSize(11).
+								Font("SF Mono, Menlo, monospace").
+								TextColor(zenInk).
+								Grow(1).
+								MinWidth(0).
+								SingleLine().
+								Tooltip(strings.Join(snap.LocalDirectAddrs, "\n"))
+							if zenPillBtn(c, "btn-copy-lan-addr", t.CopyLANAddr, false, false).Clicked() {
+								if err := a.writeClipboardText(primary, false); err != nil {
+									a.state.SetToast(t.CopyFailedPref+err.Error(), true)
+								} else {
+									a.state.SetToast(t.LANAddrCopiedToast, false)
+								}
+							}
+						})
+				}
+
+				mygoui.Box(c).Height(1).FillWidth().Background(zenBorder)
+
+				mygoui.Column(c).Gap(6).FillWidth().Children(func() {
+					mygoui.Column(c).Gap(2).FillWidth().Children(func() {
+						mygoui.Text(c, t.PeerDirectIPsLabel).FontSize(12).FontWeight(600).TextColor(zenInk)
+						mygoui.Text(c, t.PeerDirectIPHint).FontSize(11).TextColor(zenInkMuted).Wrap()
+					})
+
+					var remoteDevs []model.Device
+					for _, dev := range snap.Devices {
+						if dev.Revoked {
+							continue
+						}
+						if dev.IsSelf || (snap.Identity.DeviceID != "" && dev.DeviceID == snap.Identity.DeviceID) {
+							continue
+						}
+						remoteDevs = append(remoteDevs, dev)
+					}
+
+					if len(remoteDevs) == 0 {
+						mygoui.Text(c, t.NoPeersForDirect).FontSize(11.5).TextColor(zenInkMuted).Wrap()
+					} else {
+						for _, dev := range remoteDevs {
+							name := dev.Name
+							if name == "" {
+								name = shortID(dev.DeviceID)
+							}
+							placeholder := t.PeerDirectEmptyPlace
+							if len(dev.DirectAddrs) > 0 {
+								placeholder = fmt.Sprintf(t.PeerDirectAutoPlaceF, dev.DirectAddrs[0])
+							}
+							mygoui.Row(c.Key("set-peer-row-"+dev.DeviceID)).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
+								mygoui.Text(c, name).
+									FontSize(12).
+									FontWeight(500).
+									TextColor(zenInk).
+									Width(116).
+									SingleLine().
+									Tooltip(name + " (" + shortID(dev.DeviceID) + ")")
+								mygoui.TextInput(c.Key("set-peer-direct-"+dev.DeviceID), a.settingsDraft.PeerDirectAddrPtr(dev.DeviceID)).
+									Placeholder(placeholder).
+									Label(name).
+									Grow(1)
+							})
+						}
+					}
+				})
 			})
 
-			mygoui.Segmented(c.Key("set-derp-mode"), &a.settingsDraft.DERPModeIdx,
-				t.DERPDefault,
-				t.DERPSelfHosted,
-				t.DERPCustomMap,
-			).Label(t.DERPModeLabel).FillEqually()
-
-			switch a.settingsDraft.DERPModeIdx {
-			case 0:
-				mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
-					mygoui.Text(c, t.PreferredRegionID).FontSize(12).TextColor(zenInkSecondary)
-					mygoui.TextInput(c.Key("set-region-id"), &a.settingsDraft.RegionIDStr).
-						Placeholder("304").
-						Label("Region ID").
-						Width(120)
+			// Card 2: DERP Relay fallback server card.
+			settingsSectionCard(c, func() {
+				mygoui.Column(c).Gap(3).FillWidth().Children(func() {
+					mygoui.Text(c, t.DERPServer).FontSize(12.5).Bold().TextColor(zenInk)
+					mygoui.Text(c, t.DERPHint).FontSize(11).TextColor(zenInkMuted).Wrap()
 				})
-			case 1:
-				mygoui.Column(c).Gap(8).FillWidth().Children(func() {
-					mygoui.TextInput(c.Key("set-custom-host"), &a.settingsDraft.CustomHost).
-						Placeholder("derp.example.com").
-						Label(t.CustomDERPHost).
-						FillWidth()
-					mygoui.Row(c).Gap(6).FillWidth().Children(func() {
-						mygoui.TextInput(c.Key("set-derp-port"), &a.settingsDraft.CustomDERPPortStr).
-							Placeholder("443").
-							Label(t.DERPPort).
-							Grow(1)
-						mygoui.TextInput(c.Key("set-stun-port"), &a.settingsDraft.CustomSTUNPortStr).
-							Placeholder("3478").
-							Label(t.STUNPort).
-							Grow(1)
-						mygoui.TextInput(c.Key("set-region-name"), &a.settingsDraft.CustomRegionName).
-							Placeholder(t.CustomNodePlace).
-							Label(t.RegionName).
-							Grow(1)
+
+				mygoui.Segmented(c.Key("set-derp-mode"), &a.settingsDraft.DERPModeIdx,
+					t.DERPDefault,
+					t.DERPSelfHosted,
+					t.DERPCustomMap,
+				).Label(t.DERPModeLabel).FillEqually()
+
+				switch a.settingsDraft.DERPModeIdx {
+				case 0:
+					mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
+						mygoui.Text(c, t.PreferredRegionID).FontSize(12).TextColor(zenInkSecondary)
+						mygoui.TextInput(c.Key("set-region-id"), &a.settingsDraft.RegionIDStr).
+							Placeholder("304").
+							Label("Region ID").
+							Width(120)
 					})
-				})
-			case 2:
-				mygoui.TextInput(c.Key("set-derp-map-url"), &a.settingsDraft.DERPMapURL).
-					Placeholder("https://example.com/derpmap.json").
-					Label("DERPMap URL").
-					FillWidth()
-			}
-
-			mygoui.Row(c).Gap(8).Justify(mygoui.Start).FillWidth().Children(func() {
-				if zenPillBtn(c, "btn-hotswitch-derp", t.ApplyHotSwitchDERP, false, a.settingsSaving).Clicked() && !a.settingsSaving {
-					cfg, err := a.settingsDraft.ToConfig()
-					if err != nil {
-						a.settingsErr = err.Error()
-					} else {
-						a.applySettingsAsync(cfg, true)
-					}
+				case 1:
+					mygoui.Column(c).Gap(8).FillWidth().Children(func() {
+						mygoui.TextInput(c.Key("set-custom-host"), &a.settingsDraft.CustomHost).
+							Placeholder("derp.example.com").
+							Label(t.CustomDERPHost).
+							FillWidth()
+						mygoui.Row(c).Gap(6).FillWidth().Children(func() {
+							mygoui.TextInput(c.Key("set-derp-port"), &a.settingsDraft.CustomDERPPortStr).
+								Placeholder("443").
+								Label(t.DERPPort).
+								Grow(1)
+							mygoui.TextInput(c.Key("set-stun-port"), &a.settingsDraft.CustomSTUNPortStr).
+								Placeholder("3478").
+								Label(t.STUNPort).
+								Grow(1)
+							mygoui.TextInput(c.Key("set-region-name"), &a.settingsDraft.CustomRegionName).
+								Placeholder(t.CustomNodePlace).
+								Label(t.RegionName).
+								Grow(1)
+						})
+					})
+				case 2:
+					mygoui.TextInput(c.Key("set-derp-map-url"), &a.settingsDraft.DERPMapURL).
+						Placeholder("https://example.com/derpmap.json").
+						Label("DERPMap URL").
+						FillWidth()
 				}
+
+				mygoui.Row(c).Gap(8).Justify(mygoui.Start).FillWidth().Children(func() {
+					if zenPillBtn(c, "btn-hotswitch-derp", t.ApplyHotSwitchDERP, false, a.settingsSaving).Clicked() && !a.settingsSaving {
+						cfg, err := a.settingsDraft.ToConfig()
+						if err != nil {
+							a.settingsErr = err.Error()
+						} else {
+							a.applySettingsAsync(cfg, true)
+						}
+					}
+				})
 			})
 		})
 	})

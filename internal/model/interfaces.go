@@ -149,3 +149,20 @@ type AppAPI interface {
 	// Events
 	Subscribe() (ch <-chan AppEvent, unsubscribe func())
 }
+
+// DirectTransportConfigurer is an optional interface implemented by transports
+// supporting direct TCP+mTLS LAN and custom-IP connections alongside Tailcat/DERP.
+type DirectTransportConfigurer interface {
+	// ConfigureDirect updates the direct TCP listener port (<=0 disables listening),
+	// per-peer user-configured custom host[:port] overrides, and peer-announced LAN addresses.
+	ConfigureDirect(listenPort int, peerOverrides map[string]string, learnedAddrs map[string][]string) error
+	// LocalDirectAddrs returns the currently advertised local LAN host:port endpoints.
+	LocalDirectAddrs() []string
+}
+
+// DirectInfoProvider is an optional interface implemented by AppAPI backends
+// that expose locally detected LAN direct connection endpoints for display in UI.
+type DirectInfoProvider interface {
+	LocalDirectAddrs() []string
+}
+

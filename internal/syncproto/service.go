@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path"
@@ -95,8 +96,10 @@ type Service struct {
 	pair     *pairingSession
 	memberMu sync.Mutex
 
-	peerMu         sync.RWMutex
-	connectedPeers map[string]bool
+	peerMu          sync.RWMutex
+	connectedPeers  map[string]bool
+	learnedDirectMu sync.RWMutex
+	learnedDirect   map[string][]string
 
 	transfersMu     sync.Mutex
 	activeTransfers map[string]*activeTransfer
@@ -109,7 +112,10 @@ type Service struct {
 	subs      map[uint64]chan model.AppEvent
 }
 
-var _ model.AppAPI = (*Service)(nil)
+var (
+	_ model.AppAPI             = (*Service)(nil)
+	_ model.DirectInfoProvider = (*Service)(nil)
+)
 
 // NewService constructs a Service wired to the provided store, CAS, and peer transport.
 func NewService(st model.Store, cas model.CASStore, tr model.PeerTransportProvider, opts Options) (*Service, error) {
@@ -134,6 +140,7 @@ func NewService(st model.Store, cas model.CASStore, tr model.PeerTransportProvid
 		tr:              tr,
 		opts:            opts,
 		connectedPeers:  make(map[string]bool),
+		learnedDirect:   make(map[string][]string),
 		activeTransfers: make(map[string]*activeTransfer),
 		resumeWakeCh:    make(chan struct{}, 1),
 		limiter:         newRateLimiter(0),
@@ -225,6 +232,9 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 
 	s.refreshTransportPeers()
+	if err := s.applyDirectTransportConfig(); err != nil {
+		log.Printf("syncproto: direct transport init warning: %v", err)
+	}
 
 	// Seed connectedPeers from initial PeerStatuses snapshot.
 	for _, st := range s.tr.PeerStatuses() {
@@ -307,14 +317,14 @@ func (s *Service) Identity() model.LocalIdentity {
 	return id
 }
 
-// Config returns the current runtime configuration.
+// Config returns a deep copy of the current runtime configuration.
 func (s *Service) Config() model.AppConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.cfg
+	return s.cfg.Clone()
 }
 
-// UpdateConfig persists updated configuration, applying DERP changes and rate limits if changed.
+// UpdateConfig persists updated configuration, applying direct connection settings, DERP changes, and rate limits.
 func (s *Service) UpdateConfig(ctx context.Context, cfg model.AppConfig) error {
 	if err := s.requireStarted(); err != nil {
 		return err
@@ -352,7 +362,39 @@ func (s *Service) UpdateConfig(ctx context.Context, cfg model.AppConfig) error {
 		cfg.Language = model.NormalizeLanguage(cfg.Language)
 	}
 
+	if cfg.DirectListenPort < 0 || cfg.DirectListenPort > 65535 {
+		return fmt.Errorf("invalid direct listen port %d", cfg.DirectListenPort)
+	}
+	if !cfg.DirectListenDisabled && cfg.DirectListenPort == 0 {
+		cfg.DirectListenPort = model.DefaultDirectPort
+	}
+	if len(cfg.PeerDirectAddrs) > 0 {
+		cleaned := make(map[string]string, len(cfg.PeerDirectAddrs))
+		for devID, raw := range cfg.PeerDirectAddrs {
+			idTrim := strings.TrimSpace(devID)
+			valTrim := strings.TrimSpace(raw)
+			if idTrim == "" || valTrim == "" {
+				continue
+			}
+			norm, err := model.NormalizeDirectAddr(valTrim, model.DefaultDirectPort)
+			if err != nil {
+				return err
+			}
+			cleaned[idTrim] = norm
+		}
+		if len(cleaned) > 0 {
+			cfg.PeerDirectAddrs = cleaned
+		} else {
+			cfg.PeerDirectAddrs = nil
+		}
+	} else {
+		cfg.PeerDirectAddrs = nil
+	}
+
 	derpChanged := cfg.DERP != oldCfg.DERP
+	directChanged := cfg.DirectListenPort != oldCfg.DirectListenPort ||
+		cfg.DirectListenDisabled != oldCfg.DirectListenDisabled ||
+		!stringMapsEqual(cfg.PeerDirectAddrs, oldCfg.PeerDirectAddrs)
 
 	if err := s.store.SaveConfig(cfg); err != nil {
 		return err
@@ -360,7 +402,7 @@ func (s *Service) UpdateConfig(ctx context.Context, cfg model.AppConfig) error {
 	s.limiter.SetLimit(cfg.MaxDownloadBytesPerS)
 
 	s.mu.Lock()
-	s.cfg = cfg
+	s.cfg = cfg.Clone()
 	id := s.identity
 	nameChanged := cfg.DeviceName != id.DeviceName
 	if nameChanged {
@@ -384,12 +426,19 @@ func (s *Service) UpdateConfig(ctx context.Context, cfg model.AppConfig) error {
 		}
 	}
 
+	var directErr error
+	if directChanged {
+		directErr = s.applyDirectTransportConfig()
+	}
+
 	s.emit(model.AppEvent{Type: model.EventConfigUpdated})
 
 	if derpChanged {
-		return s.UpdateDERP(ctx, cfg.DERP)
+		if err := s.UpdateDERP(ctx, cfg.DERP); err != nil {
+			return err
+		}
 	}
-	return nil
+	return directErr
 }
 
 // UpdateDERP hot-switches DERP settings, increments RouteEpoch, signs MemberEventRoute, and gossips it.
@@ -840,9 +889,119 @@ func (s *Service) HasActiveTransfers() bool {
 	return false
 }
 
-// ListDevices lists paired devices from the local store.
+// ListDevices lists paired devices from the local store and hydrates runtime auto-discovered LAN endpoints.
 func (s *Service) ListDevices(includeRevoked bool) ([]model.Device, error) {
-	return s.store.ListDevices(includeRevoked)
+	devs, err := s.store.ListDevices(includeRevoked)
+	if err != nil {
+		return nil, err
+	}
+	selfID := s.Identity().DeviceID
+	localAddrs := s.LocalDirectAddrs()
+
+	s.learnedDirectMu.RLock()
+	for i := range devs {
+		if devs[i].IsSelf || (selfID != "" && devs[i].DeviceID == selfID) {
+			if len(localAddrs) > 0 {
+				devs[i].DirectAddrs = append([]string(nil), localAddrs...)
+			}
+			continue
+		}
+		if learned := s.learnedDirect[devs[i].DeviceID]; len(learned) > 0 {
+			devs[i].DirectAddrs = append([]string(nil), learned...)
+		}
+	}
+	s.learnedDirectMu.RUnlock()
+	return devs, nil
+}
+
+// LocalDirectAddrs returns the currently advertised local LAN direct endpoints.
+func (s *Service) LocalDirectAddrs() []string {
+	dtc, ok := s.tr.(model.DirectTransportConfigurer)
+	if !ok {
+		return nil
+	}
+	return dtc.LocalDirectAddrs()
+}
+
+func (s *Service) applyDirectTransportConfig() error {
+	dtc, ok := s.tr.(model.DirectTransportConfigurer)
+	if !ok {
+		return nil
+	}
+	cfg := s.Config()
+	listenPort := cfg.EffectiveDirectListenPort()
+
+	s.learnedDirectMu.RLock()
+	learnedCopy := make(map[string][]string, len(s.learnedDirect))
+	for k, v := range s.learnedDirect {
+		if len(v) > 0 {
+			learnedCopy[k] = append([]string(nil), v...)
+		}
+	}
+	s.learnedDirectMu.RUnlock()
+
+	return dtc.ConfigureDirect(listenPort, cfg.PeerDirectAddrs, learnedCopy)
+}
+
+func (s *Service) recordLearnedDirectAddrs(peerDeviceID string, rawAddrs []string) {
+	if peerDeviceID == "" || len(rawAddrs) == 0 {
+		return
+	}
+	seen := make(map[string]struct{}, len(rawAddrs))
+	cleaned := make([]string, 0, len(rawAddrs))
+	for _, raw := range rawAddrs {
+		norm, err := model.NormalizeDirectAddr(raw, model.DefaultDirectPort)
+		if err != nil || norm == "" {
+			continue
+		}
+		if _, ok := seen[norm]; ok {
+			continue
+		}
+		seen[norm] = struct{}{}
+		cleaned = append(cleaned, norm)
+	}
+	if len(cleaned) == 0 {
+		return
+	}
+
+	changed := false
+	s.learnedDirectMu.Lock()
+	if !stringSlicesEqual(s.learnedDirect[peerDeviceID], cleaned) {
+		s.learnedDirect[peerDeviceID] = cleaned
+		changed = true
+	}
+	s.learnedDirectMu.Unlock()
+
+	if changed {
+		if err := s.applyDirectTransportConfig(); err != nil {
+			log.Printf("syncproto: apply learned direct addrs warning: %v", err)
+		}
+		s.emit(model.AppEvent{Type: model.EventDevicesUpdated})
+	}
+}
+
+func stringMapsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, va := range a {
+		if vb, ok := b[k]; !ok || va != vb {
+			return false
+		}
+	}
+	return true
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // PeerStatuses returns the transport's current peer connectivity snapshot.
@@ -1194,6 +1353,10 @@ func (s *Service) loadOrCreateConfig(id model.LocalIdentity) (model.AppConfig, e
 			cfg.Language = normLang
 			changed = true
 		}
+		if !cfg.DirectListenDisabled && cfg.DirectListenPort == 0 {
+			cfg.DirectListenPort = model.DefaultDirectPort
+			changed = true
+		}
 		if changed {
 			if err := s.store.SaveConfig(cfg); err != nil {
 				return model.AppConfig{}, err
@@ -1210,6 +1373,7 @@ func (s *Service) loadOrCreateConfig(id model.LocalIdentity) (model.AppConfig, e
 		DeviceName:           id.DeviceName,
 		Language:             model.LanguageAuto,
 		DERP:                 model.DefaultDERPConfig(),
+		DirectListenPort:     model.DefaultDirectPort,
 		AutoDownloadMaxBytes: autoDownload,
 		DownloadDir:          s.opts.DownloadDir,
 		MinimizeToTray:       true,

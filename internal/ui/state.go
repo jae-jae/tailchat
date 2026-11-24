@@ -15,46 +15,48 @@ import (
 
 // ViewSnapshot is an immutable point-in-time copy of UI state for lock-free rendering.
 type ViewSnapshot struct {
-	Identity        model.LocalIdentity
-	Config          model.AppConfig
-	Locale          Locale
-	Messages        []model.Message
-	SearchQuery     string
-	SearchResults   []model.Message
-	Devices         []model.Device
-	Peers           map[string]model.PeerConnStatus
-	Transfers       map[string]model.TransferTask
-	Update          updater.Status
-	ToastText       string
-	ToastIsErr      bool
-	ToastExpiresAt  time.Time
-	OnlineCount     int
-	HasDirect       bool
-	HasDERP         bool
-	ConnectivityTxt string
+	Identity         model.LocalIdentity
+	Config           model.AppConfig
+	Locale           Locale
+	Messages         []model.Message
+	SearchQuery      string
+	SearchResults    []model.Message
+	Devices          []model.Device
+	LocalDirectAddrs []string
+	Peers            map[string]model.PeerConnStatus
+	Transfers        map[string]model.TransferTask
+	Update           updater.Status
+	ToastText        string
+	ToastIsErr       bool
+	ToastExpiresAt   time.Time
+	OnlineCount      int
+	HasDirect        bool
+	HasDERP          bool
+	ConnectivityTxt  string
 }
 
 // State is the thread-safe UI view-model backed by model.AppAPI.
 type State struct {
 	api model.AppAPI
 
-	mu              sync.RWMutex
-	identity        model.LocalIdentity
-	config          model.AppConfig
-	messages        []model.Message
-	searchQuery     string
-	searchSeq       uint64
-	searchResults   []model.Message
-	devices         []model.Device
-	peers           map[string]model.PeerConnStatus
-	transfers       map[string]model.TransferTask
-	updater         *updater.Manager
-	toastText       string
-	toastIsErr      bool
-	toastExpiresAt  time.Time
-	onInvalidate    func()
-	onRemoteMessage func(model.Message)
-	onConfigChanged func(model.AppConfig)
+	mu               sync.RWMutex
+	identity         model.LocalIdentity
+	config           model.AppConfig
+	messages         []model.Message
+	searchQuery      string
+	searchSeq        uint64
+	searchResults    []model.Message
+	devices          []model.Device
+	localDirectAddrs []string
+	peers            map[string]model.PeerConnStatus
+	transfers        map[string]model.TransferTask
+	updater          *updater.Manager
+	toastText        string
+	toastIsErr       bool
+	toastExpiresAt   time.Time
+	onInvalidate     func()
+	onRemoteMessage  func(model.Message)
+	onConfigChanged  func(model.AppConfig)
 
 	subMu      sync.Mutex
 	unsub      func()
@@ -181,12 +183,20 @@ func (s *State) Stop() {
 	}
 }
 
+func (s *State) fetchLocalDirectAddrs() []string {
+	if p, ok := s.api.(model.DirectInfoProvider); ok {
+		return p.LocalDirectAddrs()
+	}
+	return nil
+}
+
 // RefreshAll reloads identity, config, messages, devices, peers, and transfers from AppAPI.
 func (s *State) RefreshAll() {
 	id := s.api.Identity()
 	cfg := s.api.Config()
 	msgs, _ := s.api.ListMessages(200, "")
 	devs, _ := s.api.ListDevices(false)
+	localDirect := s.fetchLocalDirectAddrs()
 	peers := s.api.PeerStatuses()
 	transfers, _ := s.api.ListTransfers()
 
@@ -194,9 +204,10 @@ func (s *State) RefreshAll() {
 
 	s.mu.Lock()
 	s.identity = id
-	s.config = cfg
+	s.config = cfg.Clone()
 	s.messages = msgs
 	s.devices = devs
+	s.localDirectAddrs = localDirect
 	s.peers = make(map[string]model.PeerConnStatus, len(peers))
 	for _, p := range peers {
 		s.peers[p.DeviceID] = p
@@ -272,9 +283,11 @@ func (s *State) handleEvent(ev model.AppEvent) {
 		}
 	case model.EventDevicesUpdated:
 		devs, _ := s.api.ListDevices(false)
+		localDirect := s.fetchLocalDirectAddrs()
 		peers := s.api.PeerStatuses()
 		s.mu.Lock()
 		s.devices = devs
+		s.localDirectAddrs = localDirect
 		for _, p := range peers {
 			s.peers[p.DeviceID] = p
 		}
@@ -288,10 +301,12 @@ func (s *State) handleEvent(ev model.AppEvent) {
 		}
 	case model.EventConfigUpdated:
 		cfg := s.api.Config()
+		localDirect := s.fetchLocalDirectAddrs()
 		s.mu.Lock()
-		s.config = cfg
+		s.config = cfg.Clone()
+		s.localDirectAddrs = localDirect
 		s.mu.Unlock()
-		s.notifyConfigChanged(cfg)
+		s.notifyConfigChanged(cfg.Clone())
 	case model.EventError:
 		if ev.ErrText != "" {
 			s.SetToast(ev.ErrText, true)
@@ -335,7 +350,7 @@ func (s *State) deleteMessageLocked(msgID string) {
 func (s *State) Config() model.AppConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.config
+	return s.config.Clone()
 }
 
 // Locale returns the resolved UI Locale for the active AppConfig.Language preference.
@@ -377,7 +392,17 @@ func (s *State) Snapshot() ViewSnapshot {
 	}
 
 	devs := make([]model.Device, len(s.devices))
-	copy(devs, s.devices)
+	for i, d := range s.devices {
+		if len(d.DirectAddrs) > 0 {
+			d.DirectAddrs = append([]string(nil), d.DirectAddrs...)
+		}
+		devs[i] = d
+	}
+
+	var localDirect []string
+	if len(s.localDirectAddrs) > 0 {
+		localDirect = append([]string(nil), s.localDirectAddrs...)
+	}
 
 	peers := make(map[string]model.PeerConnStatus, len(s.peers))
 	onlineCount := 0
@@ -420,23 +445,24 @@ func (s *State) Snapshot() ViewSnapshot {
 	}
 
 	return ViewSnapshot{
-		Identity:        s.identity,
-		Config:          s.config,
-		Locale:          loc,
-		Messages:        msgs,
-		SearchQuery:     s.searchQuery,
-		SearchResults:   searchRes,
-		Devices:         devs,
-		Peers:           peers,
-		Transfers:       transfers,
-		Update:          updateSt,
-		ToastText:       toastTxt,
-		ToastIsErr:      toastErr,
-		ToastExpiresAt:  s.toastExpiresAt,
-		OnlineCount:     onlineCount,
-		HasDirect:       hasDirect,
-		HasDERP:         hasDERP,
-		ConnectivityTxt: connTxt,
+		Identity:         s.identity,
+		Config:           s.config.Clone(),
+		Locale:           loc,
+		Messages:         msgs,
+		SearchQuery:      s.searchQuery,
+		SearchResults:    searchRes,
+		Devices:          devs,
+		LocalDirectAddrs: localDirect,
+		Peers:            peers,
+		Transfers:        transfers,
+		Update:           updateSt,
+		ToastText:        toastTxt,
+		ToastIsErr:       toastErr,
+		ToastExpiresAt:   s.toastExpiresAt,
+		OnlineCount:      onlineCount,
+		HasDirect:        hasDirect,
+		HasDERP:          hasDERP,
+		ConnectivityTxt:  connTxt,
 	}
 }
 
@@ -855,10 +881,12 @@ func (s *State) ApplySettings(ctx context.Context, cfg model.AppConfig, hotSwitc
 		}
 	}
 	newCfg := s.api.Config()
+	localDirect := s.fetchLocalDirectAddrs()
 	s.mu.Lock()
-	s.config = newCfg
+	s.config = newCfg.Clone()
+	s.localDirectAddrs = localDirect
 	s.mu.Unlock()
-	s.notifyConfigChanged(newCfg)
+	s.notifyConfigChanged(newCfg.Clone())
 	t := tr(ResolveLocale(newCfg.Language))
 	if hotSwitchDERP {
 		s.SetToast(t.ToastDERPSwitched, false)

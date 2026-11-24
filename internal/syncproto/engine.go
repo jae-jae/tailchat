@@ -198,6 +198,10 @@ func (s *Service) handleHelloFrame(ctx context.Context, peerDeviceID string, hel
 	_ = s.store.UpsertDevice(*dev)
 	s.memberMu.Unlock()
 
+	if len(hello.DirectAddrs) > 0 {
+		s.recordLearnedDirectAddrs(peerDeviceID, hello.DirectAddrs)
+	}
+
 	// Send member events this peer doesn't have yet.
 	missingEvents := s.missingEventsFor(id.GroupID, hello.MemberEventIDs)
 	if len(missingEvents) > 0 {
@@ -272,6 +276,7 @@ func (s *Service) buildHelloPayload(isReply bool) (*HelloPayload, error) {
 		Route:          s.currentRoute(),
 		VectorClock:    vc,
 		MemberEventIDs: eventIDs,
+		DirectAddrs:    s.LocalDirectAddrs(),
 		IsReply:        isReply,
 	}, nil
 }
@@ -351,6 +356,10 @@ func (s *Service) syncWithPeer(ctx context.Context, peerDeviceID string) {
 
 	if peerHello == nil || peerHello.GroupID != id.GroupID || !s.isPeerAllowed(peerDeviceID) {
 		return
+	}
+
+	if len(peerHello.DirectAddrs) > 0 {
+		s.recordLearnedDirectAddrs(peerDeviceID, peerHello.DirectAddrs)
 	}
 
 	// Push any events or messages the remote peer is still missing.

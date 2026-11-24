@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -40,7 +41,7 @@ type TailcatOptions struct {
 }
 
 // TailcatMesh implements model.PeerTransportProvider over Tailcat WireGuard+DERP
-// tunnels multiplexed with hashicorp/yamux.
+// tunnels multiplexed with hashicorp/yamux, plus optional direct TCP+mTLS LAN tunnels.
 type TailcatMesh struct {
 	opts TailcatOptions
 
@@ -59,12 +60,21 @@ type TailcatMesh struct {
 
 	allowSet          tailcat.KeySet
 	allowedKeys       map[string]key.NodePublic
+	allowedSignKeys   map[string]ed25519.PublicKey
 	allowedClientPubs map[key.NodePublic]string
 	deviceClientPubs  map[string]key.NodePublic
 	groupSecret       []byte
 	server            *tailcat.Server
 	listener          net.Listener
 	drainingServers   map[*tailcat.Server]net.Listener
+
+	// Direct LAN / custom-IP mTLS transport state.
+	directCert          tls.Certificate
+	directListenPort    int
+	directActualPort    int
+	directListener      net.Listener
+	peerDirectOverrides map[string]string
+	peerLearnedDirect   map[string][]string
 
 	peers         map[string]*peerState
 	streamHandler model.PeerStreamHandler
@@ -77,13 +87,16 @@ type TailcatMesh struct {
 	wg sync.WaitGroup
 }
 
-var _ model.PeerTransportProvider = (*TailcatMesh)(nil)
+var (
+	_ model.PeerTransportProvider     = (*TailcatMesh)(nil)
+	_ model.DirectTransportConfigurer = (*TailcatMesh)(nil)
+)
 
 type peerState struct {
 	deviceID string
 	pubKey   key.NodePublic
 
-	// dialMu serializes outbound dial attempts so at most one tailcat.Client is
+	// dialMu serializes outbound dial attempts so at most one outbound tunnel is
 	// created/dialed per peer at a time. Lock ordering: never acquire m.mu while
 	// holding dialMu or mu; always acquire dialMu before mu if both are needed.
 	dialMu sync.Mutex
@@ -94,12 +107,17 @@ type peerState struct {
 	dialCancel context.CancelFunc
 	dialActive bool
 
-	outClient  *tailcat.Client
-	outSession *yamux.Session
-	outAddr    string
-	outDERPURL string
+	outClient         *tailcat.Client
+	outSession        *yamux.Session
+	outAddr           string
+	outDERPURL        string
+	outIsDirect       bool
+	outDirectAddr     string
+	lastDirectAttempt time.Time
 
 	inSession     *yamux.Session
+	inIsDirect    bool
+	inDirectAddr  string
 	inboundPubKey key.NodePublic
 
 	status model.PeerConnStatus
@@ -120,12 +138,15 @@ func NewTailcatMesh(opts TailcatOptions) *TailcatMesh {
 		opts.PingInterval = defaultPingInterval
 	}
 	return &TailcatMesh{
-		opts:              opts,
-		allowedKeys:       make(map[string]key.NodePublic),
-		allowedClientPubs: make(map[key.NodePublic]string),
-		deviceClientPubs:  make(map[string]key.NodePublic),
-		drainingServers:   make(map[*tailcat.Server]net.Listener),
-		peers:             make(map[string]*peerState),
+		opts:                opts,
+		allowedKeys:         make(map[string]key.NodePublic),
+		allowedSignKeys:     make(map[string]ed25519.PublicKey),
+		allowedClientPubs:   make(map[key.NodePublic]string),
+		deviceClientPubs:    make(map[string]key.NodePublic),
+		drainingServers:     make(map[*tailcat.Server]net.Listener),
+		peerDirectOverrides: make(map[string]string),
+		peerLearnedDirect:   make(map[string][]string),
+		peers:               make(map[string]*peerState),
 	}
 }
 
@@ -171,6 +192,10 @@ func (m *TailcatMesh) Start(ctx context.Context, id model.LocalIdentity, derp mo
 	}
 
 	derp = normalizeDERPConfig(derp)
+	directCert, err := buildIdentityTLSCert(id)
+	if err != nil {
+		return model.RouteRecord{}, fmt.Errorf("build direct mTLS cert: %w", err)
+	}
 
 	m.mu.Lock()
 	if m.closed {
@@ -186,6 +211,7 @@ func (m *TailcatMesh) Start(ctx context.Context, id model.LocalIdentity, derp mo
 	m.nodePub = nodePub
 	m.psk = psk
 	m.derp = derp
+	m.directCert = directCert
 	m.groupSecret = append([]byte(nil), id.GroupPrivateKey...)
 	m.rootCtx, m.rootCancel = context.WithCancel(context.Background())
 	m.mu.Unlock()
@@ -400,6 +426,7 @@ func (m *TailcatMesh) SetGroupSecret(secret []byte) {
 // SetAllowedPeers updates the server allowlist and disconnects any peer removed from it.
 func (m *TailcatMesh) SetAllowedPeers(peers []model.Device) {
 	nextAllowed := make(map[string]key.NodePublic, len(peers))
+	nextSignKeys := make(map[string]ed25519.PublicKey, len(peers))
 
 	m.mu.Lock()
 	selfID := m.id.DeviceID
@@ -414,6 +441,13 @@ func (m *TailcatMesh) SetAllowedPeers(peers []model.Device) {
 		}
 		canonical := FormatNodePublic(pub)
 		nextAllowed[canonical] = pub
+		signKey := dev.SignPublicKey
+		if len(signKey) != ed25519.PublicKeySize {
+			signKey = dev.Route.SignPublicKey
+		}
+		if len(signKey) == ed25519.PublicKeySize {
+			nextSignKeys[canonical] = append(ed25519.PublicKey(nil), signKey...)
+		}
 		m.allowSet.Add(pub)
 		if len(m.groupSecret) > 0 && selfID != "" {
 			derivedPub := DerivePairClientKey(m.groupSecret, canonical, selfID).Public()
@@ -443,6 +477,7 @@ func (m *TailcatMesh) SetAllowedPeers(peers []model.Device) {
 		}
 	}
 	m.allowedKeys = nextAllowed
+	m.allowedSignKeys = nextSignKeys
 
 	servers := m.activeServersLocked()
 	var removedPeers []*peerState
@@ -485,6 +520,7 @@ func (m *TailcatMesh) RevokePeer(deviceID string) {
 		hasPub = true
 		delete(m.allowedKeys, deviceID)
 	}
+	delete(m.allowedSignKeys, deviceID)
 	if hasPub {
 		m.allowSet.Remove(pub)
 		disconnectPubs = append(disconnectPubs, pub)
@@ -517,7 +553,8 @@ func (m *TailcatMesh) RevokePeer(deviceID string) {
 }
 
 // SyncPeers updates known peers and ensures deterministic pairwise connectivity
-// (smaller DeviceID proactively maintains a single outbound client+yamux tunnel).
+// (smaller DeviceID, or any peer with an explicit custom direct IP override,
+// proactively maintains a single outbound yamux tunnel).
 func (m *TailcatMesh) SyncPeers(peers []model.Device) {
 	m.mu.Lock()
 	if !m.started || m.closed {
@@ -527,6 +564,12 @@ func (m *TailcatMesh) SyncPeers(peers []model.Device) {
 	selfID := m.id.DeviceID
 	localDERP := m.derp
 	rootCtx := m.rootCtx
+	overrideIDs := make(map[string]bool, len(m.peerDirectOverrides))
+	for id, addr := range m.peerDirectOverrides {
+		if strings.TrimSpace(addr) != "" {
+			overrideIDs[id] = true
+		}
+	}
 	m.mu.Unlock()
 
 	seen := make(map[string]struct{}, len(peers))
@@ -558,7 +601,7 @@ func (m *TailcatMesh) SyncPeers(peers []model.Device) {
 		ps.device = dev
 		ps.revoked = false
 		routeChanged := ps.outClient != nil && (ps.outAddr != newAddr || ps.outDERPURL != newDERPURL)
-		shouldDial := selfID < dev.DeviceID
+		shouldDial := selfID < dev.DeviceID || overrideIDs[dev.DeviceID]
 		if shouldDial && !ps.dialActive {
 			ps.dialActive = true
 			toStartDial = append(toStartDial, ps)
@@ -783,10 +826,20 @@ func (m *TailcatMesh) pickActiveSession(ps *peerState) *yamux.Session {
 	if ps.revoked {
 		return nil
 	}
-	if ps.outSession != nil && !ps.outSession.IsClosed() {
+	outOpen := ps.outSession != nil && !ps.outSession.IsClosed()
+	inOpen := ps.inSession != nil && !ps.inSession.IsClosed()
+
+	// Always prefer a direct TCP+mTLS session over a DERP-relayed session.
+	if outOpen && ps.outIsDirect {
 		return ps.outSession
 	}
-	if ps.inSession != nil && !ps.inSession.IsClosed() {
+	if inOpen && ps.inIsDirect {
+		return ps.inSession
+	}
+	if outOpen {
+		return ps.outSession
+	}
+	if inOpen {
 		return ps.inSession
 	}
 	return nil
@@ -802,10 +855,14 @@ func (m *TailcatMesh) clearClosedSession(ps *peerState, sess *yamux.Session) boo
 		ps.outClient = nil
 		ps.outAddr = ""
 		ps.outDERPURL = ""
+		ps.outIsDirect = false
+		ps.outDirectAddr = ""
 		evicted = true
 	}
 	if ps.inSession == sess {
 		ps.inSession = nil
+		ps.inIsDirect = false
+		ps.inDirectAddr = ""
 		evicted = true
 	}
 	ps.mu.Unlock()
@@ -842,6 +899,16 @@ func (m *TailcatMesh) ensureOutboundLocked(ctx context.Context, ps *peerState) (
 		ps.mu.Unlock()
 		return nil, fmt.Errorf("peer %q is revoked", ps.deviceID)
 	}
+	if ps.outSession != nil && !ps.outSession.IsClosed() && ps.outIsDirect {
+		s := ps.outSession
+		ps.mu.Unlock()
+		return s, nil
+	}
+	if ps.inSession != nil && !ps.inSession.IsClosed() && ps.inIsDirect {
+		s := ps.inSession
+		ps.mu.Unlock()
+		return s, nil
+	}
 	if ps.outSession != nil && !ps.outSession.IsClosed() {
 		s := ps.outSession
 		ps.mu.Unlock()
@@ -859,14 +926,17 @@ func (m *TailcatMesh) ensureOutboundLocked(ctx context.Context, ps *peerState) (
 	ps.outSession = nil
 	ps.outAddr = ""
 	ps.outDERPURL = ""
+	ps.outIsDirect = false
+	ps.outDirectAddr = ""
 	ps.mu.Unlock()
 
 	if oldClient != nil {
 		drainAndCloseClient(oldClient, defaultDrainTimeout)
 	}
 
-	if addrStr == "" {
-		return nil, fmt.Errorf("peer %q has no tailcat_addr", ps.deviceID)
+	directCandidates := m.directCandidatesForPeer(ps.deviceID)
+	if addrStr == "" && len(directCandidates) == 0 {
+		return nil, fmt.Errorf("peer %q has no tailcat_addr or direct address", ps.deviceID)
 	}
 
 	m.updatePeerStatus(ps, model.PeerConnStatus{
@@ -875,6 +945,74 @@ func (m *TailcatMesh) ensureOutboundLocked(ctx context.Context, ps *peerState) (
 		PathKind:  model.ConnPathConnecting,
 		UpdatedAt: time.Now().UnixMilli(),
 	})
+
+	// Direct-first path: try custom IP override and auto-discovered LAN addresses before DERP.
+	var directErr error
+	if len(directCandidates) > 0 {
+		ps.mu.Lock()
+		ps.lastDirectAttempt = time.Now()
+		ps.mu.Unlock()
+
+		sess, directAddr, rttMs, err := m.dialDirectPeer(ctx, ps)
+		if err == nil && sess != nil {
+			ps.mu.Lock()
+			if ps.revoked || rootCtx.Err() != nil {
+				ps.mu.Unlock()
+				_ = sess.Close()
+				return nil, fmt.Errorf("peer %q revoked or mesh closed during direct dial", ps.deviceID)
+			}
+			ps.outClient = nil
+			ps.outSession = sess
+			ps.outAddr = ""
+			ps.outDERPURL = ""
+			ps.outIsDirect = true
+			ps.outDirectAddr = directAddr
+			ps.mu.Unlock()
+
+			log.Printf("tailcat: connected direct mTLS to peer %s (%s, %.1fms)", shortIDForLog(ps.deviceID), directAddr, rttMs)
+			m.updatePeerStatus(ps, model.PeerConnStatus{
+				DeviceID:  ps.deviceID,
+				Connected: true,
+				PathKind:  model.ConnPathDirect,
+				Endpoint:  directAddr,
+				LatencyMs: rttMs,
+				UpdatedAt: time.Now().UnixMilli(),
+			})
+
+			if !m.goSpawn(func() { m.serveYamuxSession(rootCtx, ps, sess, true) }) {
+				_ = sess.Close()
+				return nil, errors.New("tailcat mesh closed")
+			}
+			return sess, nil
+		}
+		directErr = err
+		if ctx.Err() != nil {
+			m.updatePeerStatus(ps, model.PeerConnStatus{
+				DeviceID:  ps.deviceID,
+				Connected: false,
+				PathKind:  model.ConnPathDisconnected,
+				LastError: err.Error(),
+				UpdatedAt: time.Now().UnixMilli(),
+			})
+			return nil, err
+		}
+		log.Printf("tailcat: direct dial peer %s failed (%v); falling back to Tailcat", shortIDForLog(ps.deviceID), err)
+	}
+
+	if addrStr == "" {
+		err := directErr
+		if err == nil {
+			err = fmt.Errorf("peer %q has no tailcat_addr", ps.deviceID)
+		}
+		m.updatePeerStatus(ps, model.PeerConnStatus{
+			DeviceID:  ps.deviceID,
+			Connected: false,
+			PathKind:  model.ConnPathDisconnected,
+			LastError: err.Error(),
+			UpdatedAt: time.Now().UnixMilli(),
+		})
+		return nil, err
+	}
 
 	client := &tailcat.Client{
 		Server:     tailcat.Addr(addrStr),
@@ -917,6 +1055,8 @@ func (m *TailcatMesh) ensureOutboundLocked(ctx context.Context, ps *peerState) (
 	ps.outSession = sess
 	ps.outAddr = addrStr
 	ps.outDERPURL = derpURL
+	ps.outIsDirect = false
+	ps.outDirectAddr = ""
 	ps.mu.Unlock()
 
 	regionStr := ""
@@ -972,7 +1112,7 @@ func (m *TailcatMesh) peerDialLoop(ctx context.Context, ps *peerState) {
 		if revoked {
 			return
 		}
-		if addr == "" {
+		if addr == "" && len(m.directCandidatesForPeer(ps.deviceID)) == 0 {
 			if !sleepCtx(ctx, backoff) {
 				return
 			}
@@ -1036,22 +1176,32 @@ func (m *TailcatMesh) acceptLoop(srv *tailcat.Server, ln net.Listener) {
 
 		ps := m.getOrCreatePeer(peerDeviceID, devicePub)
 		var prevIn *yamux.Session
+		var keepDirect bool
 		ps.mu.Lock()
 		if ps.revoked {
 			ps.mu.Unlock()
 			_ = sess.Close()
 			continue
 		}
-		prevIn = ps.inSession
-		ps.inSession = sess
-		ps.inboundPubKey = peerKey
+		if ps.inSession != nil && !ps.inSession.IsClosed() && ps.inIsDirect {
+			// Keep the active direct inbound session as primary, while still serving streams on this DERP session.
+			keepDirect = true
+		} else {
+			prevIn = ps.inSession
+			ps.inSession = sess
+			ps.inIsDirect = false
+			ps.inDirectAddr = ""
+			ps.inboundPubKey = peerKey
+		}
 		ps.mu.Unlock()
 
 		if prevIn != nil {
 			_ = prevIn.Close()
 		}
 
-		m.inspectInboundStatus(srv, ps, sess)
+		if !keepDirect {
+			m.inspectInboundStatus(srv, ps, sess)
+		}
 
 		m.mu.Lock()
 		rootCtx := m.rootCtx
@@ -1068,6 +1218,10 @@ func (m *TailcatMesh) acceptLoop(srv *tailcat.Server, ln net.Listener) {
 func (m *TailcatMesh) serveYamuxSession(ctx context.Context, ps *peerState, sess *yamux.Session, isOutbound bool) {
 	defer func() {
 		var oldClient *tailcat.Client
+		var remOutSess, remInSess *yamux.Session
+		var remOutDirect, remInDirect bool
+		var remOutDirectAddr, remInDirectAddr string
+		var remOutClient *tailcat.Client
 		stillConnected := false
 
 		ps.mu.Lock()
@@ -1077,12 +1231,27 @@ func (m *TailcatMesh) serveYamuxSession(ctx context.Context, ps *peerState, sess
 			ps.outClient = nil
 			ps.outAddr = ""
 			ps.outDERPURL = ""
+			ps.outIsDirect = false
+			ps.outDirectAddr = ""
 		}
 		if !isOutbound && ps.inSession == sess {
 			ps.inSession = nil
+			ps.inIsDirect = false
+			ps.inDirectAddr = ""
 		}
-		stillConnected = (ps.outSession != nil && !ps.outSession.IsClosed()) ||
-			(ps.inSession != nil && !ps.inSession.IsClosed())
+		if ps.outSession != nil && !ps.outSession.IsClosed() {
+			remOutSess = ps.outSession
+			remOutDirect = ps.outIsDirect
+			remOutDirectAddr = ps.outDirectAddr
+			remOutClient = ps.outClient
+			stillConnected = true
+		}
+		if ps.inSession != nil && !ps.inSession.IsClosed() {
+			remInSess = ps.inSession
+			remInDirect = ps.inIsDirect
+			remInDirectAddr = ps.inDirectAddr
+			stillConnected = true
+		}
 		ps.mu.Unlock()
 
 		_ = sess.Close()
@@ -1097,6 +1266,21 @@ func (m *TailcatMesh) serveYamuxSession(ctx context.Context, ps *peerState, sess
 				PathKind:  model.ConnPathDisconnected,
 				UpdatedAt: time.Now().UnixMilli(),
 			})
+			return
+		}
+
+		// Refresh status to reflect whichever remaining session is still active.
+		if remOutSess != nil && remOutDirect {
+			m.probeDirectSession(ps, remOutSess, remOutDirectAddr)
+		} else if remInSess != nil && remInDirect {
+			m.probeDirectSession(ps, remInSess, remInDirectAddr)
+		} else if remOutClient != nil && remOutSess != nil {
+			m.goSpawn(func() { m.probeOutboundClient(ctx, ps, remOutClient) })
+		} else if remInSess != nil {
+			m.mu.Lock()
+			srv := m.server
+			m.mu.Unlock()
+			m.inspectInboundStatus(srv, ps, remInSess)
 		}
 	}()
 
@@ -1183,7 +1367,14 @@ func (m *TailcatMesh) pollPeerStatuses(ctx context.Context) {
 		return
 	}
 	srv := m.server
+	selfID := m.id.DeviceID
 	peers := m.snapshotPeersLocked()
+	overrideIDs := make(map[string]bool, len(m.peerDirectOverrides))
+	for id, addr := range m.peerDirectOverrides {
+		if strings.TrimSpace(addr) != "" {
+			overrideIDs[id] = true
+		}
+	}
 	m.mu.Unlock()
 
 	for _, ps := range peers {
@@ -1193,17 +1384,39 @@ func (m *TailcatMesh) pollPeerStatuses(ctx context.Context) {
 		ps.mu.Lock()
 		outClient := ps.outClient
 		outSess := ps.outSession
+		outDirect := ps.outIsDirect
+		outDirectAddr := ps.outDirectAddr
 		inSess := ps.inSession
+		inDirect := ps.inIsDirect
+		inDirectAddr := ps.inDirectAddr
 		revoked := ps.revoked
 		ps.mu.Unlock()
 
 		if revoked {
 			continue
 		}
-		if outClient != nil && outSess != nil && !outSess.IsClosed() {
+		outOpen := outSess != nil && !outSess.IsClosed()
+		inOpen := inSess != nil && !inSess.IsClosed()
+
+		if outOpen && outDirect {
+			m.probeDirectSession(ps, outSess, outDirectAddr)
+			continue
+		}
+		if inOpen && inDirect {
+			m.probeDirectSession(ps, inSess, inDirectAddr)
+			continue
+		}
+
+		if outClient != nil && outOpen {
 			m.probeOutboundClient(ctx, ps, outClient)
-		} else if srv != nil && inSess != nil && !inSess.IsClosed() {
+		} else if srv != nil && inOpen {
 			m.inspectInboundStatus(srv, ps, inSess)
+		}
+
+		// Background DERP -> Direct upgrade when direct candidates exist.
+		if (outOpen || inOpen) && (selfID < ps.deviceID || overrideIDs[ps.deviceID]) && len(m.directCandidatesForPeer(ps.deviceID)) > 0 {
+			p := ps
+			m.goSpawn(func() { m.tryUpgradeToDirect(ctx, p, false) })
 		}
 	}
 }
@@ -1493,8 +1706,11 @@ func (m *TailcatMesh) Close(ctx context.Context) error {
 	cancel := m.rootCancel
 	srv := m.server
 	ln := m.listener
+	directLn := m.directListener
 	m.server = nil
 	m.listener = nil
+	m.directListener = nil
+	m.directActualPort = 0
 
 	draining := make(map[*tailcat.Server]net.Listener, len(m.drainingServers))
 	for s, l := range m.drainingServers {
@@ -1511,6 +1727,10 @@ func (m *TailcatMesh) Close(ctx context.Context) error {
 
 	_ = m.StopPairing()
 
+	if directLn != nil {
+		_ = directLn.Close()
+	}
+
 	// Close all peer sessions and collect active outbound clients for draining.
 	var clients []*tailcat.Client
 	for _, ps := range peers {
@@ -1526,6 +1746,10 @@ func (m *TailcatMesh) Close(ctx context.Context) error {
 		ps.outSession = nil
 		ps.inSession = nil
 		ps.outClient = nil
+		ps.outIsDirect = false
+		ps.outDirectAddr = ""
+		ps.inIsDirect = false
+		ps.inDirectAddr = ""
 		ps.mu.Unlock()
 
 		if outSess != nil {
@@ -1629,6 +1853,8 @@ func (m *TailcatMesh) resetOutboundPeer(ps *peerState) {
 	ps.outClient = nil
 	ps.outAddr = ""
 	ps.outDERPURL = ""
+	ps.outIsDirect = false
+	ps.outDirectAddr = ""
 	ps.mu.Unlock()
 
 	if outSess != nil {
@@ -1657,6 +1883,10 @@ func (m *TailcatMesh) teardownPeer(ps *peerState, markRevoked bool) {
 	ps.outClient = nil
 	ps.outAddr = ""
 	ps.outDERPURL = ""
+	ps.outIsDirect = false
+	ps.outDirectAddr = ""
+	ps.inIsDirect = false
+	ps.inDirectAddr = ""
 	ps.mu.Unlock()
 
 	if outSess != nil {
