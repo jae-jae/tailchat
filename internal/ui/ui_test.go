@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"github.com/egoist/mygo"
 	mygoui "github.com/egoist/mygo/ui"
 
 	"tailchat/internal/model"
@@ -2021,12 +2022,16 @@ func TestDevicesPopoverOptionAAccordionDirectIP(t *testing.T) {
 	}
 
 	// 2. Click auto-discovered LAN chip to quick-fill the input.
+	// Reset Auto must NOT appear yet (no saved custom override), keeping the Save button position stable.
 	if err := tt.Click("192.168.1.42:19840"); err != nil {
 		t.Fatalf("click auto LAN chip: %v", err)
 	}
 	tt.Frame()
 	if app.deviceDirectInput != "192.168.1.42:19840" {
 		t.Fatalf("deviceDirectInput after chip click = %q, want 192.168.1.42:19840", app.deviceDirectInput)
+	}
+	if tt.HasText("恢复自动") {
+		t.Fatalf("expected 恢复自动 to stay hidden before a custom IP is saved; texts: %v", tt.Texts())
 	}
 
 	// 3. Invalid IP shows inline error without saving or collapsing.
@@ -2080,3 +2085,242 @@ func TestDevicesPopoverOptionAAccordionDirectIP(t *testing.T) {
 		t.Fatalf("accordion should collapse after Reset Auto, got %q", app.expandedDeviceID)
 	}
 }
+
+func TestSearchDrawerAutoFocusAndEscapeDismiss(t *testing.T) {
+	api := newMockAppAPI()
+	state := NewState(api)
+	state.Start(context.Background())
+	t.Cleanup(state.Stop)
+
+	app := NewApp(state)
+	app.runAsync = func(fn func()) { fn() }
+
+	tt := mygoui.NewTester(app.View, 540, 740)
+	tt.Frame()
+
+	// Clicking Search opens drawer and auto-focuses input immediately without a second click.
+	if err := tt.Click("搜索消息"); err != nil {
+		t.Fatalf("click search button: %v", err)
+	}
+	tt.Frame()
+	if !app.searchOpen {
+		t.Fatalf("expected searchOpen=true after clicking search button")
+	}
+
+	tt.Type("iPhone")
+	tt.Frame()
+	if app.searchInput != "iPhone" {
+		t.Fatalf("searchInput after immediate typing = %q, want %q", app.searchInput, "iPhone")
+	}
+	if api.lastSearch != "iPhone" {
+		t.Fatalf("api.lastSearch = %q, want %q", api.lastSearch, "iPhone")
+	}
+
+	// Pressing Escape closes the search drawer and clears the query.
+	tt.Key(0, mygoui.KeyEscape)
+	tt.Frame()
+	if app.searchOpen {
+		t.Fatalf("expected searchOpen=false after Escape")
+	}
+	if app.searchInput != "" {
+		t.Fatalf("expected searchInput cleared after Escape, got %q", app.searchInput)
+	}
+}
+
+func TestDevicesPopoverRightAlignedOnLinuxTitleBarAndToastOverlayDismiss(t *testing.T) {
+	api := newMockAppAPI()
+	api.config.Language = model.LanguageEnglish
+	state := NewState(api)
+	state.Start(context.Background())
+	t.Cleanup(state.Stop)
+
+	app := NewApp(state)
+	app.runAsync = func(fn func()) { fn() }
+
+	tt := mygoui.NewTester(app.View, 540, 740)
+	// Simulate Linux Wayland title bar with right-side close button inset.
+	tt.SetTitleBar(mygoui.TitleBar{Height: 48, Right: 48})
+	tt.Frame()
+
+	if err := tt.Click("Paired Devices"); err != nil {
+		t.Fatalf("open paired devices popover: %v", err)
+	}
+	tt.Frame()
+
+	headerRect, ok := tt.Find("Paired Devices")
+	if !ok {
+		t.Fatalf("expected Paired Devices heading in popover")
+	}
+	// Popover should be right-aligned under the action bar rather than clamped to x=0.
+	if headerRect.X < 80 {
+		t.Fatalf("Devices popover stuck near left edge: heading X=%.1f, want >= 80", headerRect.X)
+	}
+
+	// Toast rendered in Overlay floats above popover and can be dismissed directly.
+	state.SetToast("Saved custom IP", false)
+	tt.Frame()
+	if !tt.HasText("Saved custom IP") {
+		t.Fatalf("expected toast text visible above popover")
+	}
+	if err := tt.Click("Dismiss"); err != nil {
+		t.Fatalf("click toast dismiss button: %v", err)
+	}
+	tt.Frame()
+	if tt.HasText("Saved custom IP") {
+		t.Fatalf("expected toast cleared after clicking dismiss")
+	}
+}
+
+func TestSettingsModalTabBarPositionStableAcrossTabs(t *testing.T) {
+	api := newMockAppAPI()
+	api.config.Language = model.LanguageEnglish
+	api.localDirectAddrs = []string{"192.168.128.3:19840", "192.168.64.4:19840"}
+	state := NewState(api)
+	state.Start(context.Background())
+	t.Cleanup(state.Stop)
+
+	app := NewApp(state)
+	app.runAsync = func(fn func()) { fn() }
+
+	tt := mygoui.NewTester(app.View, 540, 740)
+	tt.Frame()
+
+	if err := tt.Click("Settings & DERP"); err != nil {
+		t.Fatalf("open settings: %v", err)
+	}
+	tt.Frame()
+
+	baseRect, ok := tt.Find("General")
+	if !ok {
+		t.Fatalf("expected General tab visible")
+	}
+
+	for _, tab := range []string{"Transfer", "Network", "About", "General"} {
+		if err := tt.Click(tab); err != nil {
+			t.Fatalf("click tab %q: %v", tab, err)
+		}
+		tt.Frame()
+		r, ok := tt.Find("General")
+		if !ok {
+			t.Fatalf("expected General tab visible on tab %q", tab)
+		}
+		if r.Y != baseRect.Y {
+			t.Fatalf("Settings tab bar jumped vertically on tab %q: Y=%.1f, want %.1f", tab, r.Y, baseRect.Y)
+		}
+	}
+}
+
+func TestCustomLinuxWindowControlButtons(t *testing.T) {
+	api := newMockAppAPI()
+	api.config.Language = model.LanguageEnglish
+	state := NewState(api)
+	state.Start(context.Background())
+	t.Cleanup(state.Stop)
+
+	app := NewApp(state)
+	app.runAsync = func(fn func()) { fn() }
+
+	var (
+		minCount   int
+		maxCount   int
+		closeCount int
+		maximized  bool
+	)
+	app.winMinimize = func() { minCount++ }
+	app.winToggleMaximize = func() {
+		maxCount++
+		maximized = !maximized
+	}
+	app.winIsMaximized = func() bool { return maximized }
+	app.winClose = func() { closeCount++ }
+
+	tt := mygoui.NewTester(app.View, 540, 740)
+	// Empty layout (tiling WM / non-Linux): no custom window buttons rendered.
+	tt.Frame()
+	if _, ok := tt.Find("Minimize"); ok {
+		t.Fatalf("expected no custom Minimize button when layout is empty")
+	}
+
+	// GNOME-style right-aligned End buttons.
+	app.SetCustomWindowButtons(mygo.WindowButtons{End: []string{"minimize", "maximize", "close"}})
+	tt.Frame()
+
+	minRect, ok := tt.Find("Minimize")
+	if !ok {
+		t.Fatalf("expected Minimize button rendered")
+	}
+	maxRect, ok := tt.Find("Maximize")
+	if !ok {
+		t.Fatalf("expected Maximize button rendered")
+	}
+	closeRect, ok := tt.Find("Close window")
+	if !ok {
+		t.Fatalf("expected Close window button rendered")
+	}
+	if !(minRect.X < maxRect.X && maxRect.X < closeRect.X) {
+		t.Fatalf("expected End buttons ordered left-to-right (min < max < close), got X=(%.1f, %.1f, %.1f)", minRect.X, maxRect.X, closeRect.X)
+	}
+	if closeRect.X+closeRect.W > 540 || closeRect.X < 490 {
+		t.Fatalf("expected Close button near right edge of 540px window, got rect=%+v", closeRect)
+	}
+
+	if err := tt.Click("Minimize"); err != nil {
+		t.Fatalf("click Minimize: %v", err)
+	}
+	if err := tt.Click("Maximize"); err != nil {
+		t.Fatalf("click Maximize: %v", err)
+	}
+	tt.Frame()
+	if minCount != 1 || maxCount != 1 || !maximized {
+		t.Fatalf("unexpected counts after minimize/maximize: min=%d max=%d maximized=%v", minCount, maxCount, maximized)
+	}
+
+	// Maximize button label switches to Restore when maximized.
+	if _, ok := tt.Find("Restore"); !ok {
+		t.Fatalf("expected Restore button label when maximized")
+	}
+	if err := tt.Click("Restore"); err != nil {
+		t.Fatalf("click Restore: %v", err)
+	}
+	tt.Frame()
+	if maxCount != 2 || maximized {
+		t.Fatalf("expected second toggle to unmaximize, got maxCount=%d maximized=%v", maxCount, maximized)
+	}
+
+	if err := tt.Click("Close window"); err != nil {
+		t.Fatalf("click Close window: %v", err)
+	}
+	if closeCount != 1 {
+		t.Fatalf("expected closeCount=1, got %d", closeCount)
+	}
+
+	// Devices popover still stays right-aligned and non-clamped with custom End window buttons.
+	if err := tt.Click("Paired Devices"); err != nil {
+		t.Fatalf("open Paired Devices popover: %v", err)
+	}
+	tt.Frame()
+	if headingRect, ok := tt.Find("Paired Devices"); !ok || headingRect.X < 80 {
+		t.Fatalf("Devices popover misaligned with custom window buttons: ok=%v rect=%+v", ok, headingRect)
+	}
+	if err := tt.Click("Paired Devices"); err != nil {
+		t.Fatalf("close Paired Devices popover: %v", err)
+	}
+	tt.Frame()
+
+	// Left-aligned Start layout (e.g. Ubuntu/macOS-style user layout).
+	app.SetCustomWindowButtons(mygo.WindowButtons{Start: []string{"close", "minimize", "maximize"}})
+	tt.Frame()
+	startCloseRect, ok := tt.Find("Close window")
+	if !ok {
+		t.Fatalf("expected Start Close button rendered")
+	}
+	titleRect, ok := tt.Find("TailChat")
+	if !ok {
+		t.Fatalf("expected TailChat title rendered")
+	}
+	if startCloseRect.X >= titleRect.X {
+		t.Fatalf("expected Start Close button left of title: close.X=%.1f title.X=%.1f", startCloseRect.X, titleRect.X)
+	}
+}
+
+

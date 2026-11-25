@@ -18,6 +18,23 @@ import (
 
 const maxLogFileBytes = 5 << 20 // 5 MiB rotation threshold
 
+// resilientLogWriter writes to the primary persistent log file first and
+// mirrors output to an optional secondary stream (such as os.Stderr) without
+// failing if the secondary handle is unavailable (e.g. Windows -H windowsgui
+// processes launched from Explorer with no attached console).
+type resilientLogWriter struct {
+	primary io.Writer
+	mirror  io.Writer
+}
+
+func (w resilientLogWriter) Write(p []byte) (int, error) {
+	n, err := w.primary.Write(p)
+	if w.mirror != nil {
+		_, _ = w.mirror.Write(p)
+	}
+	return n, err
+}
+
 func setupPersistentLog(dataDir string) func() {
 	logPath := filepath.Join(dataDir, "tailchat.log")
 	if info, err := os.Stat(logPath); err == nil && info.Size() >= maxLogFileBytes {
@@ -29,7 +46,7 @@ func setupPersistentLog(dataDir string) func() {
 		return func() {}
 	}
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	log.SetOutput(resilientLogWriter{primary: f, mirror: os.Stderr})
 	log.Printf("tailchat: started (pid=%d, data_dir=%s)", os.Getpid(), dataDir)
 	return func() {
 		log.Printf("tailchat: shutting down (pid=%d)", os.Getpid())

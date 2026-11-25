@@ -89,8 +89,16 @@ type App struct {
 	lightboxFile    model.FileBlob
 	updateModalOpen bool
 
+	// Custom header window controls (used on Linux where HideWindowButtons is enabled).
+	windowButtonsMu sync.RWMutex
+	windowButtons   mygo.WindowButtons
+
 	// Platform integration hooks (overridable in headless tests).
 	runAsync           func(fn func())
+	winMinimize        func()
+	winToggleMaximize  func()
+	winIsMaximized     func() bool
+	winClose           func()
 	openFileDialog     func() ([]string, error)
 	chooseDirDialog    func(defaultDir string) (string, error)
 	readClipboardImage func() []byte
@@ -174,7 +182,29 @@ func (a *App) SetWindow(w *mygo.Window) {
 	if w != nil {
 		a.media.SetInvalidate(w.Invalidate)
 		a.audio.SetInvalidate(w.Invalidate)
+		a.winMinimize = w.Minimize
+		a.winToggleMaximize = w.ToggleMaximize
+		a.winIsMaximized = w.IsMaximized
+		a.winClose = w.Close
 	}
+}
+
+// SetCustomWindowButtons configures custom header window control buttons (used on Linux).
+func (a *App) SetCustomWindowButtons(wb mygo.WindowButtons) {
+	a.windowButtonsMu.Lock()
+	a.windowButtons = mygo.WindowButtons{
+		Start: append([]string(nil), wb.Start...),
+		End:   append([]string(nil), wb.End...),
+	}
+	a.windowButtonsMu.Unlock()
+	a.invalidate()
+}
+
+func (a *App) customWindowButtons() mygo.WindowButtons {
+	a.windowButtonsMu.RLock()
+	wb := a.windowButtons
+	a.windowButtonsMu.RUnlock()
+	return wb
 }
 
 // Close stops active inline media playback and releases cached GPU/decoder resources.
@@ -424,10 +454,18 @@ func (a *App) View(c *mygoui.Context) {
 
 	// Global window shortcuts.
 	c.OnShortcut(mygoui.Cmd, mygoui.KeyF, func() {
+		a.devicesPopoverOpen = false
 		a.searchOpen = true
 		a.focusSearchPending = true
 		a.searchRef.Focus()
 	})
+	if c.Shortcut(0, mygoui.KeyEscape) && (a.searchOpen || a.searchInput != "") && !a.anyOverlayOpen() {
+		a.searchOpen = false
+		if a.searchInput != "" {
+			a.searchInput = ""
+			a.setSearchQuery("")
+		}
+	}
 	if c.Shortcut(mygoui.Cmd, mygoui.KeyEnter) && strings.TrimSpace(a.composer) != "" && !a.anyOverlayOpen() {
 		a.submitComposer()
 	}
@@ -452,10 +490,10 @@ func (a *App) View(c *mygoui.Context) {
 		root.Border(2, zenAccent)
 	}
 
-	var devicesBtn mygoui.Element
+	var devicesBtn, headerActions mygoui.Element
 
 	root.Children(func() {
-		devicesBtn = a.renderHeader(c, snap)
+		devicesBtn, headerActions = a.renderHeader(c, snap)
 
 		if snap.Update.BannerVisible() {
 			a.renderUpdateBanner(c, snap)
@@ -469,30 +507,34 @@ func (a *App) View(c *mygoui.Context) {
 			a.renderDropOverlayHint(c, snap.Locale)
 		}
 
-		if snap.ToastText != "" {
-			a.renderToastPill(c, snap)
-		}
-
 		a.renderTimeline(c, snap)
 		a.renderComposer(c, snap.Locale, dragOver)
 	})
 
-	a.renderDevicesPopover(c, devicesBtn, snap)
+	a.renderDevicesPopover(c, devicesBtn, headerActions, snap)
 	a.renderPairingModal(c, snap)
 	a.renderSettingsModal(c, snap)
 	a.renderClearConfirmModal(c, snap)
 	a.renderLightboxModal(c, snap)
 	a.renderUpdateModal(c, snap)
+	if snap.ToastText != "" {
+		a.renderToastOverlay(c, snap)
+	}
 }
 
 func (a *App) anyOverlayOpen() bool {
 	return a.devicesPopoverOpen || a.pairOpen || a.settingsOpen || a.clearConfirmOpen || a.lightboxOpen || a.updateModalOpen
 }
 
-func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element {
+func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) (mygoui.Element, mygoui.Element) {
 	t := tr(snap.Locale)
 	bar := c.TitleBar()
-	leftPad := max(bar.Left+10, 18)
+	wb := a.customWindowButtons()
+	leftBase := float32(18)
+	if len(wb.Start) > 0 {
+		leftBase = 14
+	}
+	leftPad := max(bar.Left+10, leftBase)
 	rightPad := max(bar.Right+10, 14)
 	headerHeight := max(bar.Height, 60)
 
@@ -515,7 +557,7 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 		}
 	}
 
-	var devicesBtn mygoui.Element
+	var devicesBtn, headerActions mygoui.Element
 
 	mygoui.Row(c).
 		Height(headerHeight).
@@ -527,6 +569,10 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 		BorderColor(zenBorder).
 		DragWindow().
 		Children(func() {
+			if len(wb.Start) > 0 {
+				a.renderWindowButtons(c, snap.Locale, wb.Start, "start")
+			}
+
 			// Title & live connectivity status stack.
 			mygoui.Column(c).Gap(2).Grow(1).MinWidth(0).Children(func() {
 				mygoui.Text(c, "TailChat").FontSize(15).Bold().TextColor(zenInk).NoWrap()
@@ -543,9 +589,10 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 			})
 
 			// Right action bar: Search, Devices, Settings, and dedicated Pair CTA pill.
-			mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
+			headerActions = mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
 				searchActive := a.searchOpen || a.searchInput != ""
 				if zenCircleBtn(c, "btn-search", iconSearch, t.SearchMessages, searchActive).Clicked() {
+					a.devicesPopoverOpen = false
 					a.searchOpen = !a.searchOpen
 					if a.searchOpen {
 						a.focusSearchPending = true
@@ -589,9 +636,52 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) mygoui.Element 
 					a.openPairingFlow(0)
 				}
 			})
+
+			if len(wb.End) > 0 {
+				mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
+					mygoui.Box(c).Size(1, 18).Background(zenBorder).Margin(0, 4, 0, 0)
+					a.renderWindowButtons(c, snap.Locale, wb.End, "end")
+				})
+			}
 		})
 
-	return devicesBtn
+	return devicesBtn, headerActions
+}
+
+func (a *App) renderWindowButtons(c *mygoui.Context, loc Locale, buttons []string, side string) {
+	t := tr(loc)
+	maximized := a.winIsMaximized != nil && a.winIsMaximized()
+
+	mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
+		for _, kind := range buttons {
+			switch kind {
+			case "minimize":
+				if zenWindowControlBtn(c, "win-btn-"+side+"-minimize", iconWinMinimize, t.WinMinimize, false).Clicked() {
+					if a.winMinimize != nil {
+						a.winMinimize()
+					}
+				}
+			case "maximize":
+				svg := iconWinMaximize
+				label := t.WinMaximize
+				if maximized {
+					svg = iconWinRestore
+					label = t.WinRestore
+				}
+				if zenWindowControlBtn(c, "win-btn-"+side+"-maximize", svg, label, false).Clicked() {
+					if a.winToggleMaximize != nil {
+						a.winToggleMaximize()
+					}
+				}
+			case "close":
+				if zenWindowControlBtn(c, "win-btn-"+side+"-close", iconX, t.WinClose, true).Clicked() {
+					if a.winClose != nil {
+						a.winClose()
+					}
+				}
+			}
+		}
+	})
 }
 
 func (a *App) renderSearchDrawer(c *mygoui.Context, loc Locale) {
@@ -616,6 +706,7 @@ func (a *App) renderSearchDrawer(c *mygoui.Context, loc Locale) {
 					in := mygoui.TextInputBase(c.Key("search"), &a.searchInput).
 						Placeholder(t.SearchPlaceholder).
 						Label(t.SearchMessages).
+						AutoFocus().
 						Bind(&a.searchRef).
 						Grow(1).
 						FontSize(12.5).
@@ -661,42 +752,49 @@ func (a *App) renderDropOverlayHint(c *mygoui.Context, loc Locale) {
 		})
 }
 
-func (a *App) renderToastPill(c *mygoui.Context, snap ViewSnapshot) {
+func (a *App) renderToastOverlay(c *mygoui.Context, snap ViewSnapshot) {
 	t := tr(snap.Locale)
 	bg := zenInk
 	if snap.ToastIsErr {
 		bg = zenDangerDark
 	}
-	mygoui.Row(c).
-		Padding(8, 16, 0, 16).
-		Justify(mygoui.Center).
-		Children(func() {
-			mygoui.Row(c).
-				Padding(6, 12).
-				Gap(8).
-				Radius(99).
-				Background(bg).
-				AlignItems(mygoui.Center).
-				MaxWidthPercent(92).
-				Shadow(0, 6, 16, 0, mygoui.RGBA(15, 23, 42, 0.16)).
-				Children(func() {
-					mygoui.Text(c, snap.ToastText).FontSize(12).TextColor(zenSelfBubbleInk).Wrap()
-					dismiss := mygoui.ButtonBase(c.Key("toast-dismiss")).
-						Size(18, 18).
-						Radius(99).
-						Background(mygoui.RGBA(255, 255, 255, 0.14)).
-						Justify(mygoui.Center).
-						AlignItems(mygoui.Center).
-						Cursor(mygoui.CursorPointer).
-						Label(t.DismissToast).
-						Children(func() {
-							mygoui.Icon(c, iconX).Size(11, 11).TextColor(zenSelfBubbleInk)
-						})
-					if dismiss.Clicked() {
-						a.state.ClearToast()
-					}
-				})
-		})
+	mygoui.Overlay(c, func() {
+		mygoui.Row(c.Key("toast-overlay")).
+			Absolute().
+			Top(68).
+			Left(0).
+			Right(0).
+			Padding(0, 16).
+			Justify(mygoui.Center).
+			PassThrough().
+			Children(func() {
+				mygoui.Row(c).
+					Padding(6, 12).
+					Gap(8).
+					Radius(99).
+					Background(bg).
+					AlignItems(mygoui.Center).
+					MaxWidthPercent(92).
+					Shadow(0, 8, 20, 0, mygoui.RGBA(15, 23, 42, 0.22)).
+					Children(func() {
+						mygoui.Text(c, snap.ToastText).FontSize(12).TextColor(zenSelfBubbleInk).Wrap()
+						dismiss := mygoui.ButtonBase(c.Key("toast-dismiss")).
+							Size(18, 18).
+							Radius(99).
+							Background(mygoui.RGBA(255, 255, 255, 0.14)).
+							Justify(mygoui.Center).
+							AlignItems(mygoui.Center).
+							Cursor(mygoui.CursorPointer).
+							Label(t.DismissToast).
+							Children(func() {
+								mygoui.Icon(c, iconX).Size(11, 11).TextColor(zenSelfBubbleInk)
+							})
+						if dismiss.Clicked() {
+							a.state.ClearToast()
+						}
+					})
+			})
+	})
 }
 
 func (a *App) renderTimeline(c *mygoui.Context, snap ViewSnapshot) {

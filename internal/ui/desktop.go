@@ -117,6 +117,7 @@ func Run(api model.AppAPI, onReady func()) error {
 			MinWidth:             420,
 			MinHeight:            540,
 			TitleBarStyle:        mygo.TitleBarHiddenInset,
+			HideWindowButtons:    runtime.GOOS == "linux",
 			TrafficLightPosition: &mygo.Point{X: 16, Y: 22},
 			BackgroundColor:      "#F3F5F9",
 			StateKey:             "tailchat-zen-v1",
@@ -128,6 +129,17 @@ func Run(api model.AppAPI, onReady func()) error {
 
 		app.SetWindow(w)
 		state.SetInvalidate(w.Invalidate)
+
+		if runtime.GOOS == "linux" {
+			wb := mygo.Theme.WindowButtons()
+			log.Printf("tailchat: linux window buttons layout: start=%v end=%v", wb.Start, wb.End)
+			app.SetCustomWindowButtons(wb)
+			mygo.Theme.OnUpdated(func() {
+				app.SetCustomWindowButtons(mygo.Theme.WindowButtons())
+			})
+			w.OnMaximize(w.Invalidate)
+			w.OnUnmaximize(w.Invalidate)
+		}
 
 		w.OnClose(func(e *mygo.CloseEvent) {
 			mu.Lock()

@@ -165,6 +165,10 @@ type uiStrings struct {
 	SettingsAndDERP    string
 	Pair               string
 	PairNewDevice      string
+	WinMinimize        string
+	WinMaximize        string
+	WinRestore         string
+	WinClose           string
 
 	// Search drawer
 	SearchPlaceholder  string
@@ -430,6 +434,10 @@ var stringsEN = uiStrings{
 	SettingsAndDERP:    "Settings & DERP",
 	Pair:               "Pair",
 	PairNewDevice:      "Pair New Device",
+	WinMinimize:        "Minimize",
+	WinMaximize:        "Maximize",
+	WinRestore:         "Restore",
+	WinClose:           "Close window",
 
 	SearchPlaceholder:  "Search text or filenames…",
 	ClearSearch:        "Clear search",
@@ -682,6 +690,10 @@ var stringsZH = uiStrings{
 	SettingsAndDERP:    "设置与 DERP",
 	Pair:               "配对",
 	PairNewDevice:      "配对新设备",
+	WinMinimize:        "最小化",
+	WinMaximize:        "最大化",
+	WinRestore:         "还原窗口",
+	WinClose:           "关闭窗口",
 
 	SearchPlaceholder:  "搜索文字或文件名…",
 	ClearSearch:        "清除搜索",

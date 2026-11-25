@@ -595,3 +595,68 @@ func TestConfigureDirectUpgradesExistingInboundSessionOnCustomIP(t *testing.T) {
 	})
 }
 
+func TestConfigureDirectReclassifiesInboundSessionWhenCustomIPCleared(t *testing.T) {
+	idSelf, err := GenerateLocalIdentity("win-self", "windows")
+	if err != nil {
+		t.Fatalf("GenerateLocalIdentity self: %v", err)
+	}
+	idPeer, err := GenerateLocalIdentity("ubuntu-peer", "linux")
+	if err != nil {
+		t.Fatalf("GenerateLocalIdentity peer: %v", err)
+	}
+	idPeer.GroupID = idSelf.GroupID
+
+	mesh, _ := startDirectOnlyMesh(t, idSelf, false)
+	mesh.SetAllowedPeers([]model.Device{makePeerDevice(idPeer)})
+	ps := ensureTestPeer(t, mesh, makePeerDevice(idPeer))
+
+	c1, c2 := net.Pipe()
+	t.Cleanup(func() { _ = c1.Close(); _ = c2.Close() })
+	fakeInSess, err := yamux.Server(c1, newYamuxConfig())
+	if err != nil {
+		t.Fatalf("yamux.Server pipe: %v", err)
+	}
+	t.Cleanup(func() { _ = fakeInSess.Close() })
+	fakeRemoteSess, err := yamux.Client(c2, newYamuxConfig())
+	if err != nil {
+		t.Fatalf("yamux.Client pipe: %v", err)
+	}
+	t.Cleanup(func() { _ = fakeRemoteSess.Close() })
+
+	// Simulate an active inbound direct LAN connection that was classified as CustomDirect
+	// because a matching custom IP override was previously configured.
+	mesh.mu.Lock()
+	mesh.peerDirectOverrides = map[string]string{idPeer.DeviceID: "192.168.128.3:19840"}
+	mesh.mu.Unlock()
+
+	ps.mu.Lock()
+	ps.inSession = fakeInSess
+	ps.inIsDirect = true
+	ps.inDirectKind = model.ConnPathCustomDirect
+	ps.inDirectAddr = "192.168.128.3:36586"
+	ps.status = model.PeerConnStatus{
+		DeviceID:  idPeer.DeviceID,
+		Connected: true,
+		PathKind:  model.ConnPathCustomDirect,
+		Endpoint:  "192.168.128.3:36586",
+		LatencyMs: 1.2,
+	}
+	ps.mu.Unlock()
+
+	// Clearing custom IP ("Reset Auto") must immediately reclassify the inbound session to ConnPathLAN.
+	if err := mesh.ConfigureDirect(0, nil, map[string][]string{idPeer.DeviceID: {"192.168.128.3:19840"}}); err != nil {
+		t.Fatalf("ConfigureDirect clear: %v", err)
+	}
+
+	got := model.ConnPathKind("")
+	for _, st := range mesh.PeerStatuses() {
+		if st.DeviceID == idPeer.DeviceID {
+			got = st.PathKind
+		}
+	}
+	if got != model.ConnPathLAN {
+		t.Fatalf("peer PathKind after clearing custom IP = %q, want %q", got, model.ConnPathLAN)
+	}
+}
+
+

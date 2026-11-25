@@ -159,6 +159,12 @@ var (
 	iconAlertTriangle = mygoui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`))
 
 	iconNetwork = mygoui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/></svg>`))
+
+	iconWinMinimize = mygoui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>`))
+
+	iconWinMaximize = mygoui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>`))
+
+	iconWinRestore = mygoui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="12" height="12" rx="1.8"/><path d="M8 8V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2"/></svg>`))
 )
 
 // zenIcons lists all embedded SVG icons for unit-test validation.
@@ -195,6 +201,9 @@ var zenIcons = map[string]*mygoui.SVG{
 	"github":        iconGitHub,
 	"alertTriangle": iconAlertTriangle,
 	"network":       iconNetwork,
+	"winMinimize":   iconWinMinimize,
+	"winMaximize":   iconWinMaximize,
+	"winRestore":    iconWinRestore,
 }
 
 // zenCircleBtn renders a 32x32 circular icon button with Zen Popover styling.
@@ -233,6 +242,44 @@ func zenCircleBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label string, 
 		Tooltip(label).
 		Children(func() {
 			mygoui.Icon(c, svg).Size(15, 15).TextColor(fg)
+		})
+	return btn
+}
+
+// zenWindowControlBtn renders a GNOME-style circular headerbar window control button (minimize/maximize/close).
+func zenWindowControlBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label string, isClose bool) mygoui.Element {
+	btn := mygoui.ButtonBase(c.Key(key))
+
+	bg := zenTimeChipBg
+	fg := zenInkSecondary
+	if isClose {
+		if btn.Pressed() {
+			bg = mygoui.RGBA(239, 68, 68, 0.20)
+			fg = zenDangerDark
+		} else if btn.Hovered() {
+			bg = zenDangerSoft
+			fg = zenDangerDark
+		}
+	} else {
+		if btn.Pressed() {
+			bg = mygoui.RGBA(15, 23, 42, 0.14)
+			fg = zenInk
+		} else if btn.Hovered() {
+			bg = mygoui.RGBA(15, 23, 42, 0.09)
+			fg = zenInk
+		}
+	}
+
+	btn.Size(26, 26).
+		Radius(99).
+		Background(bg).
+		Justify(mygoui.Center).
+		AlignItems(mygoui.Center).
+		Cursor(mygoui.CursorPointer).
+		Label(label).
+		Tooltip(label).
+		Children(func() {
+			mygoui.Icon(c, svg).Size(12, 12).TextColor(fg)
 		})
 	return btn
 }

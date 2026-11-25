@@ -375,6 +375,7 @@ func (m *TailcatMesh) ConfigureDirect(listenPort int, peerOverrides map[string]s
 		var resetDirect bool
 		var tryUpgrade bool
 		var upgradeDelay time.Duration
+		var reclassifiedStatus *model.PeerConnStatus
 
 		ps.mu.Lock()
 		if !ps.revoked {
@@ -392,6 +393,27 @@ func (m *TailcatMesh) ConfigureDirect(listenPort int, peerOverrides map[string]s
 				if (newOverride != "" && ps.outDirectAddr != newOverride) ||
 					(newOverride == "" && ps.outDirectKind == model.ConnPathCustomDirect) {
 					resetDirect = true
+				}
+			}
+			// If user cleared or updated custom IP while connected via an inbound direct session,
+			// immediately reclassify the inbound path kind (e.g. Custom Direct -> LAN Direct)
+			// so the UI badge updates without waiting for a reconnect or restart.
+			if newOverride != oldOverride && ps.inSession != nil && !ps.inSession.IsClosed() && ps.inIsDirect {
+				newKind := classifyInboundDirectKindWithOverride(ps.inDirectAddr, newOverride)
+				if newKind != ps.inDirectKind {
+					ps.inDirectKind = newKind
+					outDirectActive := ps.outSession != nil && !ps.outSession.IsClosed() && ps.outIsDirect && !resetDirect
+					if !outDirectActive {
+						st := model.PeerConnStatus{
+							DeviceID:  ps.deviceID,
+							Connected: true,
+							PathKind:  newKind,
+							Endpoint:  ps.inDirectAddr,
+							LatencyMs: ps.status.LatencyMs,
+							UpdatedAt: time.Now().UnixMilli(),
+						}
+						reclassifiedStatus = &st
+					}
 				}
 			}
 			// Proactively upgrade connected peers to direct TCP+mTLS:
@@ -420,6 +442,9 @@ func (m *TailcatMesh) ConfigureDirect(listenPort int, peerOverrides map[string]s
 		}
 		ps.mu.Unlock()
 
+		if reclassifiedStatus != nil {
+			m.updatePeerStatus(ps, *reclassifiedStatus)
+		}
 		if resetDirect {
 			m.resetOutboundPeer(ps)
 		}
@@ -621,6 +646,13 @@ func (m *TailcatMesh) handleDirectInboundConn(rawConn net.Conn) {
 }
 
 func (m *TailcatMesh) classifyInboundDirectKind(deviceID, remoteAddr string) model.ConnPathKind {
+	m.mu.Lock()
+	override := strings.TrimSpace(m.peerDirectOverrides[deviceID])
+	m.mu.Unlock()
+	return classifyInboundDirectKindWithOverride(remoteAddr, override)
+}
+
+func classifyInboundDirectKindWithOverride(remoteAddr, override string) model.ConnPathKind {
 	remoteHost, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
 	if err != nil {
 		remoteHost = strings.TrimSpace(remoteAddr)
@@ -631,10 +663,7 @@ func (m *TailcatMesh) classifyInboundDirectKind(deviceID, remoteAddr string) mod
 		remoteIP = remoteIP.Unmap()
 	}
 
-	m.mu.Lock()
-	override := strings.TrimSpace(m.peerDirectOverrides[deviceID])
-	m.mu.Unlock()
-
+	override = strings.TrimSpace(override)
 	if override != "" {
 		if ovHost, _, ovErr := net.SplitHostPort(override); ovErr == nil {
 			if ovIP, ovParseErr := netip.ParseAddr(ovHost); ovParseErr == nil && ipOK && ovIP.Unmap() == remoteIP {

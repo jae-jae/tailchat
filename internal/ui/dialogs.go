@@ -235,12 +235,16 @@ func (d SettingsDraft) ToConfig() (model.AppConfig, error) {
 	}, nil
 }
 
-// renderDevicesPopover renders the lightweight Devices-only popover anchored to the header button.
-func (a *App) renderDevicesPopover(c *mygoui.Context, anchor mygoui.Element, snap ViewSnapshot) {
+// renderDevicesPopover renders the lightweight Devices-only popover anchored to the header action bar.
+func (a *App) renderDevicesPopover(c *mygoui.Context, anchor, actionsAnchor mygoui.Element, snap ViewSnapshot) {
 	t := tr(snap.Locale)
 	mygoui.PopoverBase(c.Key("popover-devices"), anchor, &a.devicesPopoverOpen, func(panel mygoui.Element) {
-		panel.AttachTo(anchor, mygoui.AnchorBottomRight, mygoui.AnchorTopRight).
-			Margin(8, 0, 0, 0).
+		attachTarget := actionsAnchor
+		if attachTarget == (mygoui.Element{}) {
+			attachTarget = anchor
+		}
+		panel.AttachTo(attachTarget, mygoui.AnchorBottomRight, mygoui.AnchorTopRight).
+			Margin(10, 0, 0, 0).
 			Width(356).
 			Padding(14).
 			Radius(16).
@@ -1009,7 +1013,7 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 						})
 						saveClicked = saveBtn.Clicked()
 
-						if customAddr != "" || strings.TrimSpace(a.deviceDirectInput) != "" {
+						if customAddr != "" {
 							resetBtn := mygoui.ButtonBase(c.Key("btn-dev-direct-reset-" + dev.DeviceID))
 							resetBg := zenSurface
 							if !a.deviceDirectSaving {
@@ -1052,7 +1056,7 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 						if maxChips > 2 {
 							maxChips = 2
 						}
-						mygoui.Row(c).AlignItems(mygoui.Center).Gap(5).FillWidth().Children(func() {
+						mygoui.Row(c).AlignItems(mygoui.Center).Gap(5).Wrap().FillWidth().Children(func() {
 							mygoui.Text(c, t.DeviceAutoLANLabel).FontSize(10.5).TextColor(zenInkMuted).NoWrap()
 							for i := 0; i < maxChips; i++ {
 								addr := dev.DirectAddrs[i]
@@ -1075,8 +1079,7 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 									Border(1, chipBorder).
 									AlignItems(mygoui.Center).
 									Justify(mygoui.Center).
-									Shrink(1).
-									MinWidth(0).
+									Shrink(0).
 									Cursor(mygoui.CursorPointer).
 									Label(addr).
 									Children(func() {
@@ -1084,7 +1087,7 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 											FontSize(10.5).
 											Font("SF Mono, Menlo, monospace").
 											TextColor(chipFg).
-											SingleLine()
+											NoWrap()
 									})
 								if chip.Clicked() {
 									a.deviceDirectInput = addr
@@ -1227,15 +1230,17 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 	mygoui.DialogBase(c.Key("modal-settings"), openPtr, func(backdrop, panel mygoui.Element) {
 		backdrop.Background(mygoui.RGBA(15, 23, 42, 0.32))
 		panel.Width(480).
+			Height(616).
+			MaxHeightPercent(92).
 			Padding(18, 18).
 			Radius(18).
 			Background(zenSurface).
 			Border(1, zenBorder).
 			Shadow(0, 20, 48, 0, mygoui.RGBA(15, 23, 42, 0.22))
 
-		mygoui.Column(c).Gap(14).FillWidth().Children(func() {
+		mygoui.Column(c).Gap(14).Fill().Children(func() {
 			// Modal header: Settings title + close button.
-			mygoui.Row(c).AlignItems(mygoui.Center).FillWidth().Children(func() {
+			mygoui.Row(c).AlignItems(mygoui.Center).FillWidth().Shrink(0).Children(func() {
 				mygoui.Text(c, t.SettingsTitle).FontSize(16).Bold().TextColor(zenInk)
 				mygoui.Spacer(c)
 				if zenCircleBtn(c, "settings-x", iconX, t.CloseSettings, false).Clicked() {
@@ -1249,20 +1254,27 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 				t.TabTransfer,
 				t.TabNetwork,
 				t.TabAbout,
-			).Label(t.SettingsTitle).FillEqually()
+			).Label(t.SettingsTitle).FillEqually().Shrink(0)
 
-			switch a.settingsTab {
-			case 0:
-				a.renderSettingsGeneralTab(c, t)
+			mygoui.Scroll(c.Key(fmt.Sprintf("settings-tab-scroll-%d", a.settingsTab))).
+				Grow(1).
+				MinHeight(0).
+				FillWidth().
+				Children(func() {
+					switch a.settingsTab {
+					case 0:
+						a.renderSettingsGeneralTab(c, t)
+					case 1:
+						a.renderSettingsTransferTab(c, t)
+					case 2:
+						a.renderSettingsNetworkTab(c, snap, t)
+					default:
+						a.renderSettingsAboutTab(c, snap, t)
+					}
+				})
+
+			if a.settingsTab != 3 {
 				a.renderSettingsSaveFooter(c, t)
-			case 1:
-				a.renderSettingsTransferTab(c, t)
-				a.renderSettingsSaveFooter(c, t)
-			case 2:
-				a.renderSettingsNetworkTab(c, snap, t)
-				a.renderSettingsSaveFooter(c, t)
-			default:
-				a.renderSettingsAboutTab(c, snap, t)
 			}
 		})
 	})
@@ -1371,123 +1383,121 @@ func (a *App) renderSettingsTransferTab(c *mygoui.Context, t uiStrings) {
 }
 
 func (a *App) renderSettingsNetworkTab(c *mygoui.Context, snap ViewSnapshot, t uiStrings) {
-	mygoui.Scroll(c.Key("settings-net-scroll")).MaxHeight(390).FillWidth().Children(func() {
-		mygoui.Column(c).Gap(10).FillWidth().Children(func() {
-			// Card 1: LAN & Custom Direct TCP+mTLS card.
-			settingsSectionCard(c, func() {
-				mygoui.Column(c).Gap(3).FillWidth().Children(func() {
-					mygoui.Text(c, t.DirectConnTitle).FontSize(12.5).Bold().TextColor(zenInk)
-					mygoui.Text(c, t.DirectConnHint).FontSize(11).TextColor(zenInkMuted).Wrap()
-				})
-
-				mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
-					mygoui.Checkbox(c.Key("set-direct-enable"), &a.settingsDraft.DirectListenEnabled, t.DirectListenEnable)
-					mygoui.Spacer(c)
-					mygoui.Text(c, t.DirectListenPort).FontSize(11.5).TextColor(zenInkSecondary).NoWrap()
-					mygoui.TextInput(c.Key("set-direct-port"), &a.settingsDraft.DirectListenPortStr).
-						Placeholder("19840").
-						Label(t.DirectListenPort).
-						Width(78)
-				})
-
-				if a.settingsDraft.DirectListenEnabled && len(snap.LocalDirectAddrs) > 0 {
-					shown := snap.LocalDirectAddrs
-					if len(shown) > 2 {
-						shown = shown[:2]
-					}
-					summary := strings.Join(shown, ", ")
-					primary := snap.LocalDirectAddrs[0]
-					mygoui.Row(c).
-						Padding(6, 9).
-						Gap(8).
-						Radius(9).
-						Background(zenSurface).
-						Border(1, zenBorder).
-						AlignItems(mygoui.Center).
-						FillWidth().
-						Children(func() {
-							mygoui.Text(c, t.LocalLANAddrsLabel).FontSize(11).FontWeight(600).TextColor(zenInkSecondary).NoWrap()
-							mygoui.Text(c, summary).
-								FontSize(11).
-								Font("SF Mono, Menlo, monospace").
-								TextColor(zenInk).
-								Grow(1).
-								MinWidth(0).
-								SingleLine().
-								Tooltip(strings.Join(snap.LocalDirectAddrs, "\n"))
-							if zenPillBtn(c, "btn-copy-lan-addr", t.CopyLANAddr, false, false).Clicked() {
-								if err := a.writeClipboardText(primary, false); err != nil {
-									a.state.SetToast(t.CopyFailedPref+err.Error(), true)
-								} else {
-									a.state.SetToast(t.LANAddrCopiedToast, false)
-								}
-							}
-						})
-				}
-
-				mygoui.Text(c, t.SettingsPeerIPMovedHint).FontSize(11).TextColor(zenInkMuted).Wrap()
+	mygoui.Column(c).Gap(10).Padding(0, 0, 8, 0).FillWidth().Children(func() {
+		// Card 1: LAN & Custom Direct TCP+mTLS card.
+		settingsSectionCard(c, func() {
+			mygoui.Column(c).Gap(3).FillWidth().Children(func() {
+				mygoui.Text(c, t.DirectConnTitle).FontSize(12.5).Bold().TextColor(zenInk)
+				mygoui.Text(c, t.DirectConnHint).FontSize(11).TextColor(zenInkMuted).Wrap()
 			})
 
-			// Card 2: DERP Relay fallback server card.
-			settingsSectionCard(c, func() {
-				mygoui.Column(c).Gap(3).FillWidth().Children(func() {
-					mygoui.Text(c, t.DERPServer).FontSize(12.5).Bold().TextColor(zenInk)
-					mygoui.Text(c, t.DERPHint).FontSize(11).TextColor(zenInkMuted).Wrap()
-				})
+			mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
+				mygoui.Checkbox(c.Key("set-direct-enable"), &a.settingsDraft.DirectListenEnabled, t.DirectListenEnable)
+				mygoui.Spacer(c)
+				mygoui.Text(c, t.DirectListenPort).FontSize(11.5).TextColor(zenInkSecondary).NoWrap()
+				mygoui.TextInput(c.Key("set-direct-port"), &a.settingsDraft.DirectListenPortStr).
+					Placeholder("19840").
+					Label(t.DirectListenPort).
+					Width(78)
+			})
 
-				mygoui.Segmented(c.Key("set-derp-mode"), &a.settingsDraft.DERPModeIdx,
-					t.DERPDefault,
-					t.DERPSelfHosted,
-					t.DERPCustomMap,
-				).Label(t.DERPModeLabel).FillEqually()
-
-				switch a.settingsDraft.DERPModeIdx {
-				case 0:
-					mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
-						mygoui.Text(c, t.PreferredRegionID).FontSize(12).TextColor(zenInkSecondary)
-						mygoui.TextInput(c.Key("set-region-id"), &a.settingsDraft.RegionIDStr).
-							Placeholder("304").
-							Label("Region ID").
-							Width(120)
-					})
-				case 1:
-					mygoui.Column(c).Gap(8).FillWidth().Children(func() {
-						mygoui.TextInput(c.Key("set-custom-host"), &a.settingsDraft.CustomHost).
-							Placeholder("derp.example.com").
-							Label(t.CustomDERPHost).
-							FillWidth()
-						mygoui.Row(c).Gap(6).FillWidth().Children(func() {
-							mygoui.TextInput(c.Key("set-derp-port"), &a.settingsDraft.CustomDERPPortStr).
-								Placeholder("443").
-								Label(t.DERPPort).
-								Grow(1)
-							mygoui.TextInput(c.Key("set-stun-port"), &a.settingsDraft.CustomSTUNPortStr).
-								Placeholder("3478").
-								Label(t.STUNPort).
-								Grow(1)
-							mygoui.TextInput(c.Key("set-region-name"), &a.settingsDraft.CustomRegionName).
-								Placeholder(t.CustomNodePlace).
-								Label(t.RegionName).
-								Grow(1)
-						})
-					})
-				case 2:
-					mygoui.TextInput(c.Key("set-derp-map-url"), &a.settingsDraft.DERPMapURL).
-						Placeholder("https://example.com/derpmap.json").
-						Label("DERPMap URL").
-						FillWidth()
+			if a.settingsDraft.DirectListenEnabled && len(snap.LocalDirectAddrs) > 0 {
+				shown := snap.LocalDirectAddrs
+				if len(shown) > 2 {
+					shown = shown[:2]
 				}
-
-				mygoui.Row(c).Gap(8).Justify(mygoui.Start).FillWidth().Children(func() {
-					if zenPillBtn(c, "btn-hotswitch-derp", t.ApplyHotSwitchDERP, false, a.settingsSaving).Clicked() && !a.settingsSaving {
-						cfg, err := a.settingsDraft.ToConfig()
-						if err != nil {
-							a.settingsErr = err.Error()
-						} else {
-							a.applySettingsAsync(cfg, true)
+				summary := strings.Join(shown, ", ")
+				primary := snap.LocalDirectAddrs[0]
+				mygoui.Row(c).
+					Padding(6, 9).
+					Gap(8).
+					Radius(9).
+					Background(zenSurface).
+					Border(1, zenBorder).
+					AlignItems(mygoui.Center).
+					FillWidth().
+					Children(func() {
+						mygoui.Text(c, t.LocalLANAddrsLabel).FontSize(11).FontWeight(600).TextColor(zenInkSecondary).NoWrap()
+						mygoui.Text(c, summary).
+							FontSize(11).
+							Font("SF Mono, Menlo, monospace").
+							TextColor(zenInk).
+							Grow(1).
+							MinWidth(0).
+							SingleLine().
+							Tooltip(strings.Join(snap.LocalDirectAddrs, "\n"))
+						if zenPillBtn(c, "btn-copy-lan-addr", t.CopyLANAddr, false, false).Clicked() {
+							if err := a.writeClipboardText(primary, false); err != nil {
+								a.state.SetToast(t.CopyFailedPref+err.Error(), true)
+							} else {
+								a.state.SetToast(t.LANAddrCopiedToast, false)
+							}
 						}
-					}
+					})
+			}
+
+			mygoui.Text(c, t.SettingsPeerIPMovedHint).FontSize(11).TextColor(zenInkMuted).Wrap()
+		})
+
+		// Card 2: DERP Relay fallback server card.
+		settingsSectionCard(c, func() {
+			mygoui.Column(c).Gap(3).FillWidth().Children(func() {
+				mygoui.Text(c, t.DERPServer).FontSize(12.5).Bold().TextColor(zenInk)
+				mygoui.Text(c, t.DERPHint).FontSize(11).TextColor(zenInkMuted).Wrap()
+			})
+
+			mygoui.Segmented(c.Key("set-derp-mode"), &a.settingsDraft.DERPModeIdx,
+				t.DERPDefault,
+				t.DERPSelfHosted,
+				t.DERPCustomMap,
+			).Label(t.DERPModeLabel).FillEqually()
+
+			switch a.settingsDraft.DERPModeIdx {
+			case 0:
+				mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
+					mygoui.Text(c, t.PreferredRegionID).FontSize(12).TextColor(zenInkSecondary)
+					mygoui.TextInput(c.Key("set-region-id"), &a.settingsDraft.RegionIDStr).
+						Placeholder("304").
+						Label("Region ID").
+						Width(120)
 				})
+			case 1:
+				mygoui.Column(c).Gap(8).FillWidth().Children(func() {
+					mygoui.TextInput(c.Key("set-custom-host"), &a.settingsDraft.CustomHost).
+						Placeholder("derp.example.com").
+						Label(t.CustomDERPHost).
+						FillWidth()
+					mygoui.Row(c).Gap(6).FillWidth().Children(func() {
+						mygoui.TextInput(c.Key("set-derp-port"), &a.settingsDraft.CustomDERPPortStr).
+							Placeholder("443").
+							Label(t.DERPPort).
+							Grow(1)
+						mygoui.TextInput(c.Key("set-stun-port"), &a.settingsDraft.CustomSTUNPortStr).
+							Placeholder("3478").
+							Label(t.STUNPort).
+							Grow(1)
+						mygoui.TextInput(c.Key("set-region-name"), &a.settingsDraft.CustomRegionName).
+							Placeholder(t.CustomNodePlace).
+							Label(t.RegionName).
+							Grow(1)
+					})
+				})
+			case 2:
+				mygoui.TextInput(c.Key("set-derp-map-url"), &a.settingsDraft.DERPMapURL).
+					Placeholder("https://example.com/derpmap.json").
+					Label("DERPMap URL").
+					FillWidth()
+			}
+
+			mygoui.Row(c).Gap(8).Justify(mygoui.Start).FillWidth().Children(func() {
+				if zenPillBtn(c, "btn-hotswitch-derp", t.ApplyHotSwitchDERP, false, a.settingsSaving).Clicked() && !a.settingsSaving {
+					cfg, err := a.settingsDraft.ToConfig()
+					if err != nil {
+						a.settingsErr = err.Error()
+					} else {
+						a.applySettingsAsync(cfg, true)
+					}
+				}
 			})
 		})
 	})
@@ -1495,12 +1505,12 @@ func (a *App) renderSettingsNetworkTab(c *mygoui.Context, snap ViewSnapshot, t u
 
 func (a *App) renderSettingsSaveFooter(c *mygoui.Context, t uiStrings) {
 	if a.settingsErr != "" {
-		mygoui.Text(c, a.settingsErr).FontSize(12).TextColor(zenDanger).Wrap()
+		mygoui.Text(c, a.settingsErr).FontSize(12).TextColor(zenDanger).Wrap().Shrink(0)
 	}
 
-	mygoui.Box(c).Height(1).FillWidth().Background(zenBorder)
+	mygoui.Box(c).Height(1).FillWidth().Shrink(0).Background(zenBorder)
 
-	mygoui.Row(c).Gap(8).Justify(mygoui.End).FillWidth().Children(func() {
+	mygoui.Row(c).Gap(8).Justify(mygoui.End).FillWidth().Shrink(0).Children(func() {
 		if zenPillBtn(c, "settings-close", t.Close, false, a.settingsSaving).Clicked() && !a.settingsSaving {
 			a.settingsOpen = false
 		}
