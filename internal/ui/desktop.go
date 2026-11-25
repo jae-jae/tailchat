@@ -119,6 +119,13 @@ func Run(api model.AppAPI, onReady func()) error {
 		}
 		initialDark := ResolveDarkMode(initialPref, initialSysDark)
 
+		useSplitTitleBar := runtime.GOOS == "windows" || runtime.GOOS == "linux"
+		titleBarHeight := 0
+		if useSplitTitleBar {
+			titleBarHeight = 32
+		}
+		app.SetSplitTitleBar(useSplitTitleBar)
+
 		w := mygo.NewWindow(mygo.WindowOptions{
 			Title:                "TailChat",
 			Width:                540,
@@ -126,6 +133,7 @@ func Run(api model.AppAPI, onReady func()) error {
 			MinWidth:             420,
 			MinHeight:            540,
 			TitleBarStyle:        mygo.TitleBarHiddenInset,
+			TitleBarHeight:       titleBarHeight,
 			HideWindowButtons:    runtime.GOOS == "linux",
 			TrafficLightPosition: &mygo.Point{X: 16, Y: 22},
 			BackgroundColor:      WindowBgHex(initialDark),

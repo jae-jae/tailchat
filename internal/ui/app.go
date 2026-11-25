@@ -33,8 +33,9 @@ type App struct {
 	concealedCopy      bool
 
 	// Lightweight Devices popover state (Option A · Inline Accordion).
-	devicesPopoverOpen bool
-	devicesErr         string
+	devicesPopoverOpen      bool
+	suppressStatusPillClick bool
+	devicesErr              string
 	expandedDeviceID   string
 	deviceDirectInput  string
 	deviceDirectErr    string
@@ -89,9 +90,10 @@ type App struct {
 	lightboxFile    model.FileBlob
 	updateModalOpen bool
 
-	// Custom header window controls (used on Linux where HideWindowButtons is enabled).
+	// Custom header window controls & split titlebar mode (used on Windows/Linux).
 	windowButtonsMu sync.RWMutex
 	windowButtons   mygo.WindowButtons
+	splitTitleBar   bool
 
 	// Light/dark appearance state (systemDark updated by desktop host; live preview while Settings is open).
 	appearanceMu        sync.RWMutex
@@ -213,6 +215,25 @@ func (a *App) customWindowButtons() mygo.WindowButtons {
 	wb := a.windowButtons
 	a.windowButtonsMu.RUnlock()
 	return wb
+}
+
+// SetSplitTitleBar toggles the two-tier header layout (32px dedicated window bar + 48px app toolbar)
+// used on Windows and Linux so window controls never misalign with or crowd the application toolbar.
+func (a *App) SetSplitTitleBar(enabled bool) {
+	a.windowButtonsMu.Lock()
+	changed := a.splitTitleBar != enabled
+	a.splitTitleBar = enabled
+	a.windowButtonsMu.Unlock()
+	if changed {
+		a.invalidate()
+	}
+}
+
+func (a *App) isSplitTitleBar() bool {
+	a.windowButtonsMu.RLock()
+	v := a.splitTitleBar
+	a.windowButtonsMu.RUnlock()
+	return v
 }
 
 // SetSystemDark updates the OS dark mode flag used when theme preference is "auto".
@@ -582,11 +603,105 @@ func (a *App) anyOverlayOpen() bool {
 	return a.devicesPopoverOpen || a.pairOpen || a.settingsOpen || a.clearConfirmOpen || a.lightboxOpen || a.updateModalOpen
 }
 
-func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) (mygoui.Element, mygoui.Element) {
+func headerStatusColors(p *zenPalette, snap ViewSnapshot) (dotColor, textColor, pillBg, pillBorder mygoui.Color) {
+	dotColor = p.Offline
+	textColor = p.InkMuted
+	pillBg = p.InputFill
+	pillBorder = p.Border
+	if snap.OnlineCount > 0 {
+		switch {
+		case snap.HasLANDirect:
+			dotColor = p.LANDirect
+			textColor = p.LANDirect
+			pillBg = p.LANDirectSoft
+			pillBorder = p.LANDirect.Alpha(0.28)
+		case snap.HasCustomDirect:
+			dotColor = p.CustomDirect
+			textColor = p.CustomDirect
+			pillBg = p.CustomDirectSoft
+			pillBorder = p.CustomDirectBorder
+		case snap.HasP2PDirect:
+			dotColor = p.Direct
+			textColor = p.DirectText
+			pillBg = p.DirectSoft
+			pillBorder = p.Direct.Alpha(0.28)
+		default:
+			dotColor = p.DERP
+			textColor = p.DERPText
+			pillBg = p.DERPSoft
+			pillBorder = p.DERP.Alpha(0.28)
+		}
+	}
+	return dotColor, textColor, pillBg, pillBorder
+}
+
+func (a *App) toggleDevicesPopover() {
+	a.devicesPopoverOpen = !a.devicesPopoverOpen
+	if a.devicesPopoverOpen {
+		a.pairOpen = false
+		a.settingsOpen = false
+		a.clearConfirmOpen = false
+		a.devicesErr = ""
+		a.deviceDirectErr = ""
+	} else {
+		a.expandedDeviceID = ""
+		a.deviceDirectInput = ""
+		a.deviceDirectErr = ""
+	}
+}
+
+func (a *App) renderHeaderActions(c *mygoui.Context, snap ViewSnapshot) (mygoui.Element, mygoui.Element) {
 	t := tr(snap.Locale)
+	var devicesBtn mygoui.Element
+	headerActions := mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Shrink(0).Children(func() {
+		searchActive := a.searchOpen || a.searchInput != ""
+		if zenCircleBtn(c, "btn-search", iconSearch, t.SearchMessages, searchActive).Clicked() {
+			a.devicesPopoverOpen = false
+			a.searchOpen = !a.searchOpen
+			if a.searchOpen {
+				a.focusSearchPending = true
+			} else if a.searchInput != "" {
+				a.searchInput = ""
+				a.setSearchQuery("")
+			}
+		}
+
+		devicesBtn = zenCircleBtn(c, "btn-devices", iconSmartphone, t.PairedDevices, a.devicesPopoverOpen)
+		if devicesBtn.Clicked() {
+			a.toggleDevicesPopover()
+		}
+
+		if zenCircleBtn(c, "btn-settings", iconSettings, t.SettingsAndDERP, a.settingsOpen).Clicked() {
+			a.settingsDraft = NewSettingsDraft(snap.Config)
+			a.settingsErr = ""
+			a.settingsSaving = false
+			a.settingsTab = 0
+			a.clearConfirmOpen = false
+			a.pendingDirMu.Lock()
+			a.pendingDownloadDir = nil
+			a.pendingDirMu.Unlock()
+			a.devicesPopoverOpen = false
+			a.pairOpen = false
+			a.settingsOpen = true
+		}
+
+		if zenPairHeaderBtn(c, t.Pair, t.PairNewDevice, a.pairOpen).Clicked() {
+			a.openPairingFlow(0)
+		}
+	})
+	return devicesBtn, headerActions
+}
+
+func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) (mygoui.Element, mygoui.Element) {
 	p := zenPal(c)
 	bar := c.TitleBar()
 	wb := a.customWindowButtons()
+	dotColor, subColor, pillBg, pillBorder := headerStatusColors(p, snap)
+
+	if a.isSplitTitleBar() {
+		return a.renderSplitHeader(c, snap, bar, wb, dotColor, subColor, pillBg, pillBorder)
+	}
+
 	leftBase := float32(18)
 	if len(wb.Start) > 0 {
 		leftBase = 14
@@ -594,25 +709,6 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) (mygoui.Element
 	leftPad := max(bar.Left+10, leftBase)
 	rightPad := max(bar.Right+10, 14)
 	headerHeight := max(bar.Height, 60)
-
-	dotColor := p.Offline
-	subColor := p.InkMuted
-	if snap.OnlineCount > 0 {
-		switch {
-		case snap.HasLANDirect:
-			dotColor = p.LANDirect
-			subColor = p.LANDirect
-		case snap.HasCustomDirect:
-			dotColor = p.CustomDirect
-			subColor = p.CustomDirect
-		case snap.HasP2PDirect:
-			dotColor = p.Direct
-			subColor = p.DirectText
-		default:
-			dotColor = p.DERP
-			subColor = p.DERPText
-		}
-	}
 
 	var devicesBtn, headerActions mygoui.Element
 
@@ -627,7 +723,7 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) (mygoui.Element
 		DragWindow().
 		Children(func() {
 			if len(wb.Start) > 0 {
-				a.renderWindowButtons(c, snap.Locale, wb.Start, "start")
+				a.renderWindowButtons(c, snap.Locale, wb.Start, "start", false)
 			}
 
 			// Title & live connectivity status stack.
@@ -646,58 +742,12 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) (mygoui.Element
 			})
 
 			// Right action bar: Search, Devices, Settings, and dedicated Pair CTA pill.
-			headerActions = mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
-				searchActive := a.searchOpen || a.searchInput != ""
-				if zenCircleBtn(c, "btn-search", iconSearch, t.SearchMessages, searchActive).Clicked() {
-					a.devicesPopoverOpen = false
-					a.searchOpen = !a.searchOpen
-					if a.searchOpen {
-						a.focusSearchPending = true
-					} else if a.searchInput != "" {
-						a.searchInput = ""
-						a.setSearchQuery("")
-					}
-				}
-
-				devicesBtn = zenCircleBtn(c, "btn-devices", iconSmartphone, t.PairedDevices, a.devicesPopoverOpen)
-				if devicesBtn.Clicked() {
-					a.devicesPopoverOpen = !a.devicesPopoverOpen
-					if a.devicesPopoverOpen {
-						a.pairOpen = false
-						a.settingsOpen = false
-						a.clearConfirmOpen = false
-						a.devicesErr = ""
-						a.deviceDirectErr = ""
-					} else {
-						a.expandedDeviceID = ""
-						a.deviceDirectInput = ""
-						a.deviceDirectErr = ""
-					}
-				}
-
-				if zenCircleBtn(c, "btn-settings", iconSettings, t.SettingsAndDERP, a.settingsOpen).Clicked() {
-					a.settingsDraft = NewSettingsDraft(snap.Config)
-					a.settingsErr = ""
-					a.settingsSaving = false
-					a.settingsTab = 0
-					a.clearConfirmOpen = false
-					a.pendingDirMu.Lock()
-					a.pendingDownloadDir = nil
-					a.pendingDirMu.Unlock()
-					a.devicesPopoverOpen = false
-					a.pairOpen = false
-					a.settingsOpen = true
-				}
-
-				if zenPairHeaderBtn(c, t.Pair, t.PairNewDevice, a.pairOpen).Clicked() {
-					a.openPairingFlow(0)
-				}
-			})
+			devicesBtn, headerActions = a.renderHeaderActions(c, snap)
 
 			if len(wb.End) > 0 {
 				mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
 					mygoui.Box(c).Size(1, 18).Background(p.Border).Margin(0, 4, 0, 0)
-					a.renderWindowButtons(c, snap.Locale, wb.End, "end")
+					a.renderWindowButtons(c, snap.Locale, wb.End, "end", false)
 				})
 			}
 		})
@@ -705,15 +755,142 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) (mygoui.Element
 	return devicesBtn, headerActions
 }
 
-func (a *App) renderWindowButtons(c *mygoui.Context, loc Locale, buttons []string, side string) {
+// renderSplitHeader renders the Windows/Linux two-tier header (Plan A):
+// Row 1 is a dedicated 32px draggable window titlebar with brand + OS/custom window controls;
+// Row 2 is a full-width 48px application toolbar with clickable connectivity pill + action buttons.
+func (a *App) renderSplitHeader(
+	c *mygoui.Context,
+	snap ViewSnapshot,
+	bar mygoui.TitleBar,
+	wb mygo.WindowButtons,
+	dotColor, subColor, pillBg, pillBorder mygoui.Color,
+) (mygoui.Element, mygoui.Element) {
+	t := tr(snap.Locale)
+	p := zenPal(c)
+
+	titleHeight := max(bar.Height, 32)
+	leftBase := float32(14)
+	if len(wb.Start) > 0 {
+		leftBase = 10
+	}
+	leftPad := max(bar.Left+10, leftBase)
+	rightPad := max(bar.Right+8, 10)
+
+	var devicesBtn, headerActions mygoui.Element
+
+	mygoui.Column(c).FillWidth().Children(func() {
+		// Row 1: Dedicated 32px draggable window titlebar.
+		mygoui.Row(c.Key("window-titlebar")).
+			Height(titleHeight).
+			FillWidth().
+			Padding(0, rightPad, 0, leftPad).
+			Gap(8).
+			AlignItems(mygoui.Center).
+			Background(p.TitleBarBg).
+			BorderWidth(0, 0, 1, 0).
+			BorderColor(p.Border).
+			DragWindow().
+			Children(func() {
+				if len(wb.Start) > 0 {
+					a.renderWindowButtons(c, snap.Locale, wb.Start, "start", true)
+				}
+
+				mygoui.Row(c).Gap(7).AlignItems(mygoui.Center).Shrink(0).Children(func() {
+					if iconSrc := a.appIcon(); iconSrc != nil {
+						mygoui.Row(c).
+							Size(16, 16).
+							Radius(4).
+							Clip().
+							Shrink(0).
+							Children(func() {
+								mygoui.Image(c, iconSrc).Size(16, 16).Fit(mygoui.Cover)
+							})
+					}
+					mygoui.Text(c, "TailChat").
+						FontSize(12).
+						FontWeight(600).
+						TextColor(p.InkSecondary).
+						NoWrap()
+				})
+
+				mygoui.Spacer(c)
+
+				if len(wb.End) > 0 {
+					a.renderWindowButtons(c, snap.Locale, wb.End, "end", true)
+				}
+			})
+
+		// Row 2: Full-width 48px application toolbar (status pill + Search/Devices/Settings/Pair).
+		mygoui.Row(c.Key("app-toolbar")).
+			Height(48).
+			FillWidth().
+			Padding(0, 14, 0, 14).
+			Gap(10).
+			AlignItems(mygoui.Center).
+			Background(p.Surface).
+			BorderWidth(0, 0, 1, 0).
+			BorderColor(p.Border).
+			Children(func() {
+				mygoui.Row(c).Grow(1).MinWidth(0).AlignItems(mygoui.Center).Children(func() {
+					statusBtn := mygoui.ButtonBase(c.Key("btn-status-pill"))
+					bg := pillBg
+					border := pillBorder
+					if statusBtn.Pressed() || a.devicesPopoverOpen {
+						border = subColor.Alpha(0.45)
+					} else if statusBtn.Hovered() {
+						border = subColor.Alpha(0.38)
+					}
+					statusBtn.
+						Padding(4, 10).
+						Radius(99).
+						Gap(6).
+						Background(bg).
+						Border(1, border).
+						AlignItems(mygoui.Center).
+						MaxWidthPercent(100).
+						MinWidth(0).
+						Cursor(mygoui.CursorPointer).
+						Label(snap.ConnectivityTxt).
+						Tooltip(t.PairedDevices).
+						Children(func() {
+							mygoui.Box(c).Size(6, 6).Radius(99).Shrink(0).Background(dotColor)
+							mygoui.Text(c, snap.ConnectivityTxt).
+								FontSize(12).
+								FontWeight(550).
+								TextColor(subColor).
+								MinWidth(0).
+								SingleLine()
+						})
+					if statusBtn.Pressed() && a.devicesPopoverOpen {
+						a.suppressStatusPillClick = true
+					}
+					if statusBtn.Clicked() {
+						if a.suppressStatusPillClick {
+							a.suppressStatusPillClick = false
+						} else {
+							a.toggleDevicesPopover()
+						}
+					} else if !statusBtn.Pressed() {
+						a.suppressStatusPillClick = false
+					}
+				})
+
+				devicesBtn, headerActions = a.renderHeaderActions(c, snap)
+			})
+	})
+
+	return devicesBtn, headerActions
+}
+
+func (a *App) renderWindowButtons(c *mygoui.Context, loc Locale, buttons []string, side string, compact bool) {
 	t := tr(loc)
 	maximized := a.winIsMaximized != nil && a.winIsMaximized()
 
-	mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
+	mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Shrink(0).Children(func() {
 		for _, kind := range buttons {
 			switch kind {
 			case "minimize":
-				if zenWindowControlBtn(c, "win-btn-"+side+"-minimize", iconWinMinimize, t.WinMinimize, false).Clicked() {
+				if zenWindowControlBtn(c, "win-btn-"+side+"-minimize", iconWinMinimize, t.WinMinimize, false, compact).Clicked() {
 					if a.winMinimize != nil {
 						a.winMinimize()
 					}
@@ -725,13 +902,13 @@ func (a *App) renderWindowButtons(c *mygoui.Context, loc Locale, buttons []strin
 					svg = iconWinRestore
 					label = t.WinRestore
 				}
-				if zenWindowControlBtn(c, "win-btn-"+side+"-maximize", svg, label, false).Clicked() {
+				if zenWindowControlBtn(c, "win-btn-"+side+"-maximize", svg, label, false, compact).Clicked() {
 					if a.winToggleMaximize != nil {
 						a.winToggleMaximize()
 					}
 				}
 			case "close":
-				if zenWindowControlBtn(c, "win-btn-"+side+"-close", iconX, t.WinClose, true).Clicked() {
+				if zenWindowControlBtn(c, "win-btn-"+side+"-close", iconX, t.WinClose, true, compact).Clicked() {
 					if a.winClose != nil {
 						a.winClose()
 					}
@@ -820,10 +997,14 @@ func (a *App) renderToastOverlay(c *mygoui.Context, snap ViewSnapshot) {
 		bg = p.DangerSolid
 		border = p.DangerBorder
 	}
+	topOffset := float32(68)
+	if a.isSplitTitleBar() {
+		topOffset = 88
+	}
 	mygoui.Overlay(c, func() {
 		mygoui.Row(c.Key("toast-overlay")).
 			Absolute().
-			Top(68).
+			Top(topOffset).
 			Left(0).
 			Right(0).
 			Padding(0, 16).

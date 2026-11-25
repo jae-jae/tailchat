@@ -2576,3 +2576,139 @@ func TestDarkModeFullViewRenderAndTabStability(t *testing.T) {
 	app.settingsOpen = false
 	tt.Frame()
 }
+
+func TestSplitTitleBarLayoutAndInteractions(t *testing.T) {
+	api := newMockAppAPI()
+	api.config.Language = model.LanguageEnglish
+	api.config.Theme = model.ThemeDark
+	api.peers[0].PathKind = model.ConnPathLAN
+
+	state := NewState(api)
+	state.Start(context.Background())
+	t.Cleanup(state.Stop)
+
+	app := NewApp(state)
+	app.runAsync = func(fn func()) { fn() }
+	app.SetSplitTitleBar(true)
+	app.SetCustomWindowButtons(mygo.WindowButtons{End: []string{"minimize", "maximize", "close"}})
+
+	var minCount, maxCount, closeCount int
+	var maximized bool
+	app.winMinimize = func() { minCount++ }
+	app.winToggleMaximize = func() {
+		maxCount++
+		maximized = !maximized
+	}
+	app.winIsMaximized = func() bool { return maximized }
+	app.winClose = func() { closeCount++ }
+
+	tt := mygoui.NewTester(app.View, 540, 740)
+	tt.Frame()
+
+	// Row 1 (0..32): TailChat title and window controls live strictly in the 32px chrome bar.
+	titleRect, ok := tt.Find("TailChat")
+	if !ok {
+		t.Fatalf("expected TailChat in split titlebar")
+	}
+	minRect, ok := tt.Find("Minimize")
+	if !ok {
+		t.Fatalf("expected Minimize in split titlebar")
+	}
+	closeRect, ok := tt.Find("Close window")
+	if !ok {
+		t.Fatalf("expected Close window in split titlebar")
+	}
+	if titleRect.Y+titleRect.H > 32.5 || minRect.Y+minRect.H > 32.5 || closeRect.Y+closeRect.H > 32.5 {
+		t.Fatalf("expected Row 1 items inside 0..32px: title=%+v min=%+v close=%+v", titleRect, minRect, closeRect)
+	}
+
+	// Row 2 (32..80): Status pill and app action buttons live strictly in the 48px toolbar below Row 1.
+	searchRect, ok := tt.Find("Search messages")
+	if !ok {
+		t.Fatalf("expected Search messages in Row 2 toolbar")
+	}
+	pairRect, ok := tt.Find("Pair")
+	if !ok {
+		t.Fatalf("expected Pair button in Row 2 toolbar")
+	}
+	if searchRect.Y < 32 || searchRect.Y+searchRect.H > 80.5 {
+		t.Fatalf("expected Search button in 32..80px Row 2 toolbar, got %+v", searchRect)
+	}
+	if pairRect.Y < 32 || pairRect.Y+pairRect.H > 80.5 {
+		t.Fatalf("expected Pair button in 32..80px Row 2 toolbar, got %+v", pairRect)
+	}
+
+	// Clicking the Row 2 connectivity status pill opens and closes the Devices popover.
+	snap := state.Snapshot()
+	if err := tt.Click(snap.ConnectivityTxt); err != nil {
+		t.Fatalf("click status pill %q: %v", snap.ConnectivityTxt, err)
+	}
+	tt.Frame()
+	if !app.devicesPopoverOpen {
+		t.Fatalf("expected status pill click to open Devices popover")
+	}
+	if err := tt.Click(snap.ConnectivityTxt); err != nil {
+		t.Fatalf("click status pill again to close: %v", err)
+	}
+	tt.Frame()
+	if app.devicesPopoverOpen {
+		t.Fatalf("expected second status pill click to close Devices popover")
+	}
+
+	// Window control callbacks still fire properly in Row 1.
+	if err := tt.Click("Minimize"); err != nil {
+		t.Fatalf("click Minimize: %v", err)
+	}
+	if err := tt.Click("Maximize"); err != nil {
+		t.Fatalf("click Maximize: %v", err)
+	}
+	if err := tt.Click("Close window"); err != nil {
+		t.Fatalf("click Close window: %v", err)
+	}
+	if minCount != 1 || maxCount != 1 || closeCount != 1 {
+		t.Fatalf("unexpected window button counts: min=%d max=%d close=%d", minCount, maxCount, closeCount)
+	}
+
+	// Narrow 420px min-width check: status pill and Search button must not collide.
+	narrowTT := mygoui.NewTester(app.View, 420, 600)
+	narrowTT.Frame()
+	statusRect, ok := narrowTT.Find(snap.ConnectivityTxt)
+	if !ok {
+		t.Fatalf("expected status pill at 420px width")
+	}
+	narrowSearchRect, ok := narrowTT.Find("Search messages")
+	if !ok {
+		t.Fatalf("expected Search button at 420px width")
+	}
+	if statusRect.X+statusRect.W > narrowSearchRect.X+0.5 {
+		t.Fatalf("status pill overlapped Search button at 420px: status=%+v search=%+v", statusRect, narrowSearchRect)
+	}
+
+	// Left-aligned Linux Start controls stay left of TailChat inside Row 1.
+	app.SetCustomWindowButtons(mygo.WindowButtons{Start: []string{"close", "minimize", "maximize"}})
+	tt.Frame()
+	startClose, ok := tt.Find("Close window")
+	if !ok {
+		t.Fatalf("expected Start Close button")
+	}
+	titleAfter, ok := tt.Find("TailChat")
+	if !ok {
+		t.Fatalf("expected TailChat with Start controls")
+	}
+	if startClose.X >= titleAfter.X || startClose.Y+startClose.H > 32.5 {
+		t.Fatalf("Start Close button mispositioned: close=%+v title=%+v", startClose, titleAfter)
+	}
+
+	// Disabling split titlebar restores macOS single-row 60px header.
+	app.SetSplitTitleBar(false)
+	app.SetCustomWindowButtons(mygo.WindowButtons{})
+	tt.Frame()
+	singleSearch, ok := tt.Find("Search messages")
+	if !ok {
+		t.Fatalf("expected Search messages in single-row mode")
+	}
+	if singleSearch.Y+singleSearch.H > 60.5 {
+		t.Fatalf("expected Search button inside 0..60px single-row header, got %+v", singleSearch)
+	}
+}
+

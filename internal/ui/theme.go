@@ -14,6 +14,7 @@ type zenPalette struct {
 	Dark bool
 
 	Bg            mygoui.Color
+	TitleBarBg    mygoui.Color
 	Surface       mygoui.Color
 	SurfaceSubtle mygoui.Color
 	SurfaceHover  mygoui.Color
@@ -91,6 +92,7 @@ var (
 		Dark: false,
 
 		Bg:            mygoui.Hex("#F3F5F9"),
+		TitleBarBg:    mygoui.Hex("#F8FAFC"),
 		Surface:       mygoui.Hex("#FFFFFF"),
 		SurfaceSubtle: mygoui.Hex("#F8FAFC"),
 		SurfaceHover:  mygoui.Hex("#EEF2F7"),
@@ -166,6 +168,7 @@ var (
 		Dark: true,
 
 		Bg:            mygoui.Hex("#0B1120"),
+		TitleBarBg:    mygoui.Hex("#0E1628"),
 		Surface:       mygoui.Hex("#111A2E"),
 		SurfaceSubtle: mygoui.Hex("#172238"),
 		SurfaceHover:  mygoui.Hex("#1E2C47"),
@@ -473,7 +476,7 @@ func zenCircleBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label string, 
 }
 
 // zenWindowControlBtn renders a GNOME-style circular headerbar window control button (minimize/maximize/close).
-func zenWindowControlBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label string, isClose bool) mygoui.Element {
+func zenWindowControlBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label string, isClose, compact bool) mygoui.Element {
 	p := zenPal(c)
 	btn := mygoui.ButtonBase(c.Key(key))
 
@@ -497,7 +500,14 @@ func zenWindowControlBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label s
 		}
 	}
 
-	btn.Size(26, 26).
+	btnSize := float32(26)
+	iconSize := float32(12)
+	if compact {
+		btnSize = 22
+		iconSize = 11
+	}
+
+	btn.Size(btnSize, btnSize).
 		Radius(99).
 		Background(bg).
 		Justify(mygoui.Center).
@@ -506,7 +516,7 @@ func zenWindowControlBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label s
 		Label(label).
 		Tooltip(label).
 		Children(func() {
-			mygoui.Icon(c, svg).Size(12, 12).TextColor(fg)
+			mygoui.Icon(c, svg).Size(iconSize, iconSize).TextColor(fg)
 		})
 	return btn
 }
