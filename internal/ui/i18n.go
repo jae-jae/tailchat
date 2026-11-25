@@ -3,11 +3,10 @@ package ui
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
 
 	"tailchat/internal/model"
 )
@@ -26,6 +25,9 @@ var (
 
 	// systemLocaleDetector can be overridden in tests for deterministic Auto resolution.
 	systemLocaleDetector = detectSystemLocaleCached
+
+	// platformLocaleDetector queries OS-native locale APIs (overridable in tests).
+	platformLocaleDetector = detectPlatformLocale
 )
 
 // ResolveLocale resolves a user language preference ("auto", "en", "zh") to a concrete UI Locale.
@@ -56,27 +58,39 @@ func detectSystemLocaleCached() Locale {
 func detectSystemLocale() Locale {
 	for _, key := range []string{"LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"} {
 		raw := strings.TrimSpace(os.Getenv(key))
-		if raw == "" || strings.EqualFold(raw, "C") || strings.EqualFold(raw, "POSIX") {
+		if isNeutralLocaleEnv(raw) {
 			continue
 		}
 		return parseSystemLocale(raw)
 	}
 
-	// macOS GUI apps launched from Finder/Dock often have empty LANG/LC_* env vars.
-	if runtime.GOOS == "darwin" {
-		if out, err := exec.Command("defaults", "read", "-g", "AppleLanguages").Output(); err == nil {
-			if first := extractFirstAppleLanguage(string(out)); first != "" {
-				return parseSystemLocale(first)
-			}
-		}
-		if out, err := exec.Command("defaults", "read", "-g", "AppleLocale").Output(); err == nil {
-			if raw := strings.TrimSpace(string(out)); raw != "" {
-				return parseSystemLocale(raw)
-			}
+	if platformLocaleDetector != nil {
+		if raw := strings.TrimSpace(platformLocaleDetector()); !isNeutralLocaleEnv(raw) {
+			return parseSystemLocale(raw)
 		}
 	}
 
 	return LocaleEN
+}
+
+// isNeutralLocaleEnv reports whether a locale env value is empty or contains only
+// POSIX neutral identifiers (such as "C", "POSIX", "C.UTF-8", "POSIX.UTF-8").
+func isNeutralLocaleEnv(raw string) bool {
+	for _, part := range strings.Split(raw, ":") {
+		s := normalizeLocaleToken(part)
+		if s != "" && s != "c" && s != "posix" {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeLocaleToken(part string) string {
+	s := strings.ToLower(strings.TrimSpace(part))
+	if idx := strings.IndexAny(s, ".@"); idx >= 0 {
+		s = s[:idx]
+	}
+	return strings.ReplaceAll(s, "_", "-")
 }
 
 func extractFirstAppleLanguage(out string) string {
@@ -93,18 +107,48 @@ func extractFirstAppleLanguage(out string) string {
 	return ""
 }
 
+// extractFirstUTF16MultiString extracts the first non-empty NUL-terminated string
+// from a Windows double-NUL-terminated UTF-16 multi-string buffer (REG_MULTI_SZ / PZZWSTR).
+func extractFirstUTF16MultiString(buf []uint16) string {
+	start := 0
+	for i, r := range buf {
+		if r == 0 {
+			if i == start {
+				// Double NUL (or leading NUL) terminates the multi-string.
+				return ""
+			}
+			if s := strings.TrimSpace(string(utf16.Decode(buf[start:i]))); s != "" {
+				return s
+			}
+			start = i + 1
+		}
+	}
+	if start < len(buf) {
+		return strings.TrimSpace(string(utf16.Decode(buf[start:])))
+	}
+	return ""
+}
+
+// langIDToLocaleTag maps a Win32 LANGID primary language identifier to a locale tag.
+func langIDToLocaleTag(langID uint16) string {
+	if langID == 0 {
+		return ""
+	}
+	// Primary language ID occupies the low 10 bits; LANG_CHINESE == 0x04.
+	if langID&0x03FF == 0x04 {
+		return "zh"
+	}
+	return "en"
+}
+
 // parseSystemLocale maps any OS locale identifier to LocaleZH for Chinese locales
 // and falls back to LocaleEN for all other or empty locales.
 func parseSystemLocale(raw string) Locale {
 	for _, part := range strings.Split(raw, ":") {
-		s := strings.ToLower(strings.TrimSpace(part))
+		s := normalizeLocaleToken(part)
 		if s == "" || s == "c" || s == "posix" {
 			continue
 		}
-		if idx := strings.IndexAny(s, ".@"); idx >= 0 {
-			s = s[:idx]
-		}
-		s = strings.ReplaceAll(s, "_", "-")
 		if s == "zh" || strings.HasPrefix(s, "zh-") {
 			return LocaleZH
 		}

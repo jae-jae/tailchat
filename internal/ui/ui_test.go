@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	mygoui "github.com/egoist/mygo/ui"
 
@@ -985,6 +986,74 @@ func TestLocaleResolutionAndFallback(t *testing.T) {
 	}
 	if got := ResolveLocale(model.LanguageEnglish); got != LocaleEN {
 		t.Fatalf("explicit en must override Chinese system locale, got %q", got)
+	}
+}
+
+func TestDetectSystemLocalePlatformAndWindowsHelpers(t *testing.T) {
+	// 1. Windows UTF-16 double-NUL multi-string parsing (GetUserPreferredUILanguages output).
+	utf16Cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"zh-CN primary", "zh-CN\x00en-US\x00\x00", "zh-CN"},
+		{"zh-Hans-CN", "zh-Hans-CN\x00\x00", "zh-Hans-CN"},
+		{"en-US primary", "en-US\x00zh-CN\x00\x00", "en-US"},
+		{"empty multi-string", "\x00\x00", ""},
+	}
+	for _, tc := range utf16Cases {
+		buf := utf16.Encode([]rune(tc.raw))
+		if got := extractFirstUTF16MultiString(buf); got != tc.want {
+			t.Errorf("%s: extractFirstUTF16MultiString = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	// 2. Win32 LANGID primary language decoding (GetUserDefaultUILanguage fallback).
+	langIDCases := []struct {
+		id   uint16
+		want string
+	}{
+		{0x0804, "zh"}, // zh-CN
+		{0x0404, "zh"}, // zh-TW
+		{0x0C04, "zh"}, // zh-HK
+		{0x1004, "zh"}, // zh-SG
+		{0x7C04, "zh"}, // zh-Hant
+		{0x0409, "en"}, // en-US
+		{0x0411, "en"}, // ja-JP -> unsupported -> en
+		{0x0000, ""},
+	}
+	for _, tc := range langIDCases {
+		if got := langIDToLocaleTag(tc.id); got != tc.want {
+			t.Errorf("langIDToLocaleTag(0x%04X) = %q, want %q", tc.id, got, tc.want)
+		}
+	}
+
+	// 3. detectSystemLocale falls back to platformLocaleDetector when POSIX env vars are empty or neutral (e.g. Windows / C.UTF-8).
+	for _, key := range []string{"LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"} {
+		t.Setenv(key, "")
+	}
+	origPlatform := platformLocaleDetector
+	t.Cleanup(func() { platformLocaleDetector = origPlatform })
+
+	platformLocaleDetector = func() string { return "zh-CN" }
+	if got := detectSystemLocale(); got != LocaleZH {
+		t.Fatalf("empty env + platform zh-CN = %q, want %q", got, LocaleZH)
+	}
+
+	// Neutral POSIX values like C.UTF-8 must not short-circuit platform detection.
+	t.Setenv("LANG", "C.UTF-8")
+	if got := detectSystemLocale(); got != LocaleZH {
+		t.Fatalf("LANG=C.UTF-8 + platform zh-CN = %q, want %q", got, LocaleZH)
+	}
+
+	platformLocaleDetector = func() string { return "zh-Hant-TW" }
+	if got := detectSystemLocale(); got != LocaleZH {
+		t.Fatalf("LANG=C.UTF-8 + platform zh-Hant-TW = %q, want %q", got, LocaleZH)
+	}
+
+	platformLocaleDetector = func() string { return "en-US" }
+	if got := detectSystemLocale(); got != LocaleEN {
+		t.Fatalf("LANG=C.UTF-8 + platform en-US = %q, want %q", got, LocaleEN)
 	}
 }
 
