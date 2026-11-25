@@ -296,6 +296,10 @@ type uiStrings struct {
 	LanguageAuto       string
 	LanguageEnglish    string
 	LanguageChinese    string
+	Appearance         string
+	ThemeAuto          string
+	ThemeLight         string
+	ThemeDark          string
 	DownloadDirLabel   string
 	DownloadDirPlace   string
 	DownloadDirHint    string
@@ -557,6 +561,10 @@ var stringsEN = uiStrings{
 	LanguageAuto:       "Auto",
 	LanguageEnglish:    "English",
 	LanguageChinese:    "中文",
+	Appearance:         "Appearance",
+	ThemeAuto:          "System",
+	ThemeLight:         "Light",
+	ThemeDark:          "Dark",
 	DownloadDirLabel:   "File Storage Path",
 	DownloadDirPlace:   "~/Downloads",
 	DownloadDirHint:    "Received files are saved here; leave empty for default",
@@ -813,6 +821,10 @@ var stringsZH = uiStrings{
 	LanguageAuto:       "自动",
 	LanguageEnglish:    "English",
 	LanguageChinese:    "中文",
+	Appearance:         "外观主题",
+	ThemeAuto:          "跟随系统",
+	ThemeLight:         "浅色",
+	ThemeDark:          "深色",
 	DownloadDirLabel:   "文件存储路径",
 	DownloadDirPlace:   "~/Downloads",
 	DownloadDirHint:    "接收的文件将保存到此目录，留空使用默认下载目录",

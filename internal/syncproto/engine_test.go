@@ -2312,5 +2312,55 @@ func TestUpdateConfigDirectSettingsValidationAndPersistence(t *testing.T) {
 	}
 }
 
+func TestUpdateConfigThemePersistenceAndNormalization(t *testing.T) {
+	net := newMemNetwork()
+	ctx := context.Background()
 
+	a := newRealStoreTestNode(t, net, "NodeTheme", 0)
 
+	// Default theme must be "auto".
+	if got := a.svc.Config().Theme; got != model.ThemeAuto {
+		t.Fatalf("default Theme = %q, want %q", got, model.ThemeAuto)
+	}
+
+	// Persisting dark theme.
+	cfgDark := a.svc.Config().Clone()
+	cfgDark.Theme = model.ThemeDark
+	if err := a.svc.UpdateConfig(ctx, cfgDark); err != nil {
+		t.Fatalf("UpdateConfig(dark): %v", err)
+	}
+	if got := a.svc.Config().Theme; got != model.ThemeDark {
+		t.Fatalf("after dark update, Theme = %q, want %q", got, model.ThemeDark)
+	}
+
+	// Updating unrelated field with empty Theme must preserve previous Theme.
+	cfgEmptyTheme := a.svc.Config().Clone()
+	cfgEmptyTheme.Theme = ""
+	cfgEmptyTheme.DeviceName = "Renamed Node"
+	if err := a.svc.UpdateConfig(ctx, cfgEmptyTheme); err != nil {
+		t.Fatalf("UpdateConfig(preserve theme): %v", err)
+	}
+	if got := a.svc.Config().Theme; got != model.ThemeDark {
+		t.Fatalf("empty Theme update clobbered persisted theme: got %q, want %q", got, model.ThemeDark)
+	}
+
+	// Switching to light theme with whitespace/casing normalizes cleanly.
+	cfgLight := a.svc.Config().Clone()
+	cfgLight.Theme = "  LIGHT "
+	if err := a.svc.UpdateConfig(ctx, cfgLight); err != nil {
+		t.Fatalf("UpdateConfig(light): %v", err)
+	}
+	if got := a.svc.Config().Theme; got != model.ThemeLight {
+		t.Fatalf("normalized light Theme = %q, want %q", got, model.ThemeLight)
+	}
+
+	// Unknown theme value normalizes safely back to "auto".
+	cfgUnknown := a.svc.Config().Clone()
+	cfgUnknown.Theme = "solarized"
+	if err := a.svc.UpdateConfig(ctx, cfgUnknown); err != nil {
+		t.Fatalf("UpdateConfig(unknown): %v", err)
+	}
+	if got := a.svc.Config().Theme; got != model.ThemeAuto {
+		t.Fatalf("unknown Theme = %q, want %q", got, model.ThemeAuto)
+	}
+}

@@ -20,6 +20,7 @@ const tailchatGitHubURL = "https://github.com/jae-jae/tailchat"
 type SettingsDraft struct {
 	DeviceName          string
 	LanguageIdx         int // 0: auto, 1: en, 2: zh
+	ThemeIdx            int // 0: auto, 1: light, 2: dark
 	DERPModeIdx         int // 0: default_tailcat, 1: custom_region, 2: custom_map_url
 	RegionIDStr         string
 	CustomHost          string
@@ -63,6 +64,18 @@ func (d SettingsDraft) SelectedLanguage() string {
 	}
 }
 
+// SelectedTheme returns the model.Theme* constant corresponding to ThemeIdx.
+func (d SettingsDraft) SelectedTheme() string {
+	switch d.ThemeIdx {
+	case 1:
+		return model.ThemeLight
+	case 2:
+		return model.ThemeDark
+	default:
+		return model.ThemeAuto
+	}
+}
+
 // SelectedLocale resolves the currently chosen draft language for live Settings preview.
 func (d SettingsDraft) SelectedLocale() Locale {
 	return ResolveLocale(d.SelectedLanguage())
@@ -78,6 +91,16 @@ func NewSettingsDraft(cfg model.AppConfig) SettingsDraft {
 		langIdx = 2
 	default:
 		langIdx = 0
+	}
+
+	themeIdx := 0
+	switch model.NormalizeTheme(cfg.Theme) {
+	case model.ThemeLight:
+		themeIdx = 1
+	case model.ThemeDark:
+		themeIdx = 2
+	default:
+		themeIdx = 0
 	}
 
 	modeIdx := 0
@@ -119,6 +142,7 @@ func NewSettingsDraft(cfg model.AppConfig) SettingsDraft {
 	return SettingsDraft{
 		DeviceName:          cfg.DeviceName,
 		LanguageIdx:         langIdx,
+		ThemeIdx:            themeIdx,
 		DERPModeIdx:         modeIdx,
 		RegionIDStr:         strconv.Itoa(regionID),
 		CustomHost:          cfg.DERP.CustomHost,
@@ -223,6 +247,7 @@ func (d SettingsDraft) ToConfig() (model.AppConfig, error) {
 	return model.AppConfig{
 		DeviceName:           strings.TrimSpace(d.DeviceName),
 		Language:             d.SelectedLanguage(),
+		Theme:                d.SelectedTheme(),
 		DERP:                 derpCfg,
 		DirectListenPort:     directPort,
 		DirectListenDisabled: !d.DirectListenEnabled,
@@ -237,6 +262,7 @@ func (d SettingsDraft) ToConfig() (model.AppConfig, error) {
 
 // renderDevicesPopover renders the lightweight Devices-only popover anchored to the header action bar.
 func (a *App) renderDevicesPopover(c *mygoui.Context, anchor, actionsAnchor mygoui.Element, snap ViewSnapshot) {
+	p := zenPal(c)
 	t := tr(snap.Locale)
 	mygoui.PopoverBase(c.Key("popover-devices"), anchor, &a.devicesPopoverOpen, func(panel mygoui.Element) {
 		attachTarget := actionsAnchor
@@ -248,22 +274,22 @@ func (a *App) renderDevicesPopover(c *mygoui.Context, anchor, actionsAnchor mygo
 			Width(356).
 			Padding(14).
 			Radius(16).
-			Background(zenSurface).
-			Border(1, zenBorder).
-			Shadow(0, 14, 36, 0, mygoui.RGBA(15, 23, 42, 0.16))
+			Background(p.Surface).
+			Border(1, p.Border).
+			Shadow(0, 14, 36, 0, p.ShadowPopover)
 
 		mygoui.Column(c).Gap(10).FillWidth().Children(func() {
 			// Popover header: title + online count badge.
 			mygoui.Row(c).AlignItems(mygoui.Center).Gap(8).FillWidth().Children(func() {
-				mygoui.Text(c, t.PairedDevices).FontSize(13.5).Bold().TextColor(zenInk)
+				mygoui.Text(c, t.PairedDevices).FontSize(13.5).Bold().TextColor(p.Ink)
 				mygoui.Spacer(c)
 
-				badgeBg := zenInputFill
-				badgeFg := zenInkMuted
+				badgeBg := p.InputFill
+				badgeFg := p.InkMuted
 				badgeText := t.OnlyThisDevice
 				if snap.OnlineCount > 0 {
-					badgeBg = zenDirectSoft
-					badgeFg = zenDirectText
+					badgeBg = p.DirectSoft
+					badgeFg = p.DirectText
 					badgeText = fmt.Sprintf(t.OnlineCountBadgeF, snap.OnlineCount)
 				}
 				mygoui.Row(c).
@@ -277,7 +303,7 @@ func (a *App) renderDevicesPopover(c *mygoui.Context, anchor, actionsAnchor mygo
 
 			// Device list with bounded max height so expanding an inline IP accordion never overflows.
 			if len(snap.Devices) == 0 {
-				mygoui.Text(c, t.NoPairedDevices).FontSize(12).TextColor(zenInkMuted)
+				mygoui.Text(c, t.NoPairedDevices).FontSize(12).TextColor(p.InkMuted)
 			} else {
 				mygoui.Scroll(c.Key("popover-dev-scroll")).MaxHeight(420).FillWidth().Children(func() {
 					mygoui.Column(c).Gap(7).FillWidth().Children(func() {
@@ -290,14 +316,14 @@ func (a *App) renderDevicesPopover(c *mygoui.Context, anchor, actionsAnchor mygo
 
 			// Footer CTA: jump directly to dedicated QR pairing modal.
 			footBtn := mygoui.ButtonBase(c.Key("btn-devices-to-pair"))
-			footBg := zenAccentSoft
-			footBorder := zenAccent.Alpha(0.25)
+			footBg := p.AccentSoft
+			footBorder := p.AccentBorder
 			if footBtn.Pressed() {
-				footBg = mygoui.RGBA(10, 132, 255, 0.20)
-				footBorder = zenAccent.Alpha(0.38)
+				footBg = p.AccentSoftPress
+				footBorder = p.Accent.Alpha(0.45)
 			} else if footBtn.Hovered() {
-				footBg = mygoui.RGBA(10, 132, 255, 0.16)
-				footBorder = zenAccent.Alpha(0.34)
+				footBg = p.AccentSoftHover
+				footBorder = p.Accent.Alpha(0.38)
 			}
 			footBtn.Height(34).
 				FillWidth().
@@ -310,8 +336,8 @@ func (a *App) renderDevicesPopover(c *mygoui.Context, anchor, actionsAnchor mygo
 				Cursor(mygoui.CursorPointer).
 				Label(t.PairNewDevice).
 				Children(func() {
-					mygoui.Icon(c, iconQRCode).Size(14, 14).TextColor(zenAccent)
-					mygoui.Text(c, t.PairNewDevice).FontSize(12).FontWeight(600).TextColor(zenAccent).NoWrap()
+					mygoui.Icon(c, iconQRCode).Size(14, 14).TextColor(p.Accent)
+					mygoui.Text(c, t.PairNewDevice).FontSize(12).FontWeight(600).TextColor(p.Accent).NoWrap()
 				})
 			if footBtn.Clicked() {
 				a.devicesPopoverOpen = false
@@ -319,7 +345,7 @@ func (a *App) renderDevicesPopover(c *mygoui.Context, anchor, actionsAnchor mygo
 			}
 
 			if errMsg := a.devicesErr; errMsg != "" {
-				mygoui.Text(c, errMsg).FontSize(11.5).TextColor(zenDanger).Wrap()
+				mygoui.Text(c, errMsg).FontSize(11.5).TextColor(p.Danger).Wrap()
 			}
 		})
 	})
@@ -327,20 +353,21 @@ func (a *App) renderDevicesPopover(c *mygoui.Context, anchor, actionsAnchor mygo
 
 // renderPairingModal renders the dedicated 2-tab QR-first Pairing modal.
 func (a *App) renderPairingModal(c *mygoui.Context, snap ViewSnapshot) {
+	p := zenPal(c)
 	t := tr(snap.Locale)
 	mygoui.DialogBase(c.Key("modal-pair"), &a.pairOpen, func(backdrop, panel mygoui.Element) {
-		backdrop.Background(mygoui.RGBA(15, 23, 42, 0.36))
+		backdrop.Background(p.Backdrop)
 		panel.Width(396).
 			Padding(20).
 			Radius(22).
-			Background(zenSurface).
-			Border(1, zenBorder).
-			Shadow(0, 24, 60, 0, mygoui.RGBA(15, 23, 42, 0.22))
+			Background(p.Surface).
+			Border(1, p.Border).
+			Shadow(0, 24, 60, 0, p.ShadowModal)
 
 		mygoui.Column(c).Gap(14).FillWidth().Children(func() {
 			// Modal header: title + circular close button.
 			mygoui.Row(c).AlignItems(mygoui.Center).FillWidth().Children(func() {
-				mygoui.Text(c, t.PairDeviceTitle).FontSize(16).Bold().TextColor(zenInk)
+				mygoui.Text(c, t.PairDeviceTitle).FontSize(16).Bold().TextColor(p.Ink)
 				mygoui.Spacer(c)
 				if zenCircleBtn(c, "pair-close", iconX, t.Close, false).Clicked() {
 					a.pairOpen = false
@@ -352,7 +379,7 @@ func (a *App) renderPairingModal(c *mygoui.Context, snap ViewSnapshot) {
 				Padding(4).
 				Gap(4).
 				Radius(12).
-				Background(zenInputFill).
+				Background(p.InputFill).
 				FillWidth().
 				Children(func() {
 					a.renderPairTabBtn(c, "pair-tab-qr", iconQRCode, t.TabScanQR, a.pairTab == 0, func() {
@@ -373,22 +400,27 @@ func (a *App) renderPairingModal(c *mygoui.Context, snap ViewSnapshot) {
 			}
 
 			if a.pairErr != "" {
-				mygoui.Text(c, a.pairErr).FontSize(11.5).TextColor(zenDanger).Wrap()
+				mygoui.Text(c, a.pairErr).FontSize(11.5).TextColor(p.Danger).Wrap()
 			}
 		})
 	})
 }
 
 func (a *App) renderPairTabBtn(c *mygoui.Context, key string, icon *mygoui.SVG, label string, active bool, onClick func()) {
+	p := zenPal(c)
 	btn := mygoui.ButtonBase(c.Key(key))
 
 	bg := mygoui.RGBA(0, 0, 0, 0)
-	fg := zenInkSecondary
+	fg := p.InkSecondary
 	if active {
-		bg = zenSurface
-		fg = zenInk
+		if p.Dark {
+			bg = p.ControlActive
+		} else {
+			bg = p.Surface
+		}
+		fg = p.Ink
 	} else if btn.Hovered() {
-		fg = zenInk
+		fg = p.Ink
 	}
 
 	btn.Grow(1).
@@ -402,7 +434,7 @@ func (a *App) renderPairTabBtn(c *mygoui.Context, key string, icon *mygoui.SVG, 
 		Cursor(mygoui.CursorPointer).
 		Label(label)
 	if active {
-		btn.Shadow(0, 1, 4, 0, mygoui.RGBA(15, 23, 42, 0.09))
+		btn.Shadow(0, 1, 4, 0, p.ShadowSoft)
 	}
 	btn.Children(func() {
 		mygoui.Icon(c, icon).Size(14, 14).TextColor(fg)
@@ -414,6 +446,7 @@ func (a *App) renderPairTabBtn(c *mygoui.Context, key string, icon *mygoui.SVG, 
 }
 
 func (a *App) renderPairingQRTab(c *mygoui.Context, loc Locale) {
+	p := zenPal(c)
 	t := tr(loc)
 	if !a.pairLoading && a.pairCode == "" && a.pairErr == "" {
 		a.ensurePairingCode()
@@ -428,41 +461,51 @@ func (a *App) renderPairingQRTab(c *mygoui.Context, loc Locale) {
 		}
 	}
 
+	var qrBmp *mygoui.Bitmap
+	if !a.pairLoading && !expired {
+		qrBmp = a.pairingQRBitmap()
+	}
+	qrFrameBg := p.Surface
+	if qrBmp != nil {
+		// Always preserve a crisp white quiet-zone around the QR matrix for reliable scanning.
+		qrFrameBg = p.QRCardBg
+	}
+
 	// Subtle QR showcase card (never renders raw tailchat-pair:// plaintext).
 	mygoui.Column(c).
 		Padding(16).
 		Gap(12).
 		Radius(16).
-		Background(zenSurfaceSubtle).
-		Border(1, zenBorder).
+		Background(p.SurfaceSubtle).
+		Border(1, p.Border).
 		AlignItems(mygoui.Center).
 		FillWidth().
 		Children(func() {
-			// Crisp white QR frame.
+			// Crisp white QR frame when showing the QR code; themed surface for loading/expired states.
 			mygoui.Column(c).
 				Width(196).
 				Height(196).
 				Padding(10).
 				Radius(16).
-				Background(zenSurface).
-				Border(1, zenBorder).
-				Shadow(0, 6, 18, 0, mygoui.RGBA(15, 23, 42, 0.07)).
+				Background(qrFrameBg).
+				Border(1, p.Border).
+				Shadow(0, 6, 18, 0, p.ShadowSoft).
 				Justify(mygoui.Center).
 				AlignItems(mygoui.Center).
 				Children(func() {
 					if a.pairLoading {
-						mygoui.Text(c, t.GeneratingQR).FontSize(12).TextColor(zenInkMuted)
+						mygoui.Text(c, t.GeneratingQR).FontSize(12).TextColor(p.InkMuted)
 					} else if expired {
 						mygoui.Column(c).Gap(10).AlignItems(mygoui.Center).Children(func() {
-							mygoui.Text(c, t.QRExpired).FontSize(12.5).Bold().TextColor(zenInk).NoWrap()
+							mygoui.Text(c, t.QRExpired).FontSize(12.5).Bold().TextColor(p.Ink).NoWrap()
 							if zenPillBtn(c, "btn-regen-pair", t.Regenerate, true, false).Clicked() {
 								a.refreshPairingCode()
 							}
 						})
-					} else if qrBmp := a.pairingQRBitmap(); qrBmp != nil {
+					} else if qrBmp != nil {
 						mygoui.Image(c, qrBmp).Size(176, 176)
 					} else {
-						mygoui.Text(c, t.GeneratingQR).FontSize(12).TextColor(zenInkMuted)
+						mygoui.Text(c, t.GeneratingQR).FontSize(12).TextColor(p.InkMuted)
 					}
 				})
 
@@ -479,12 +522,12 @@ func (a *App) renderPairingQRTab(c *mygoui.Context, loc Locale) {
 						mygoui.Row(c).
 							Padding(2, 8).
 							Radius(99).
-							Background(zenDirectSoft).
+							Background(p.DirectSoft).
 							Children(func() {
 								mygoui.Text(c, fmt.Sprintf(t.ExpiresInF, mins, secs)).
 									FontSize(11).
 									FontWeight(650).
-									TextColor(zenDirectText).
+									TextColor(p.DirectText).
 									NoWrap()
 							})
 					}
@@ -492,19 +535,19 @@ func (a *App) renderPairingQRTab(c *mygoui.Context, loc Locale) {
 					mygoui.Row(c).
 						Padding(2, 8).
 						Radius(99).
-						Background(zenDangerSoft).
+						Background(p.DangerSoft).
 						Children(func() {
-							mygoui.Text(c, t.ExpiredBadge).FontSize(11).FontWeight(650).TextColor(zenDanger).NoWrap()
+							mygoui.Text(c, t.ExpiredBadge).FontSize(11).FontWeight(650).TextColor(p.Danger).NoWrap()
 						})
 				}
-				mygoui.Text(c, t.MeshHint).FontSize(12).TextColor(zenInkSecondary).NoWrap()
+				mygoui.Text(c, t.MeshHint).FontSize(12).TextColor(p.InkSecondary).NoWrap()
 			})
 		})
 
 	// Concise helper caption.
 	mygoui.Text(c, t.QRCaption).
 		FontSize(12).
-		TextColor(zenInkSecondary).
+		TextColor(p.InkSecondary).
 		TextAlign(mygoui.Center).
 		Wrap().
 		FillWidth()
@@ -518,21 +561,21 @@ func (a *App) renderPairingQRTab(c *mygoui.Context, loc Locale) {
 		copyDisabled := a.pairLoading || expired || a.pairCode == ""
 
 		copyBtn := mygoui.ButtonBase(c.Key("btn-copy-pair"))
-		copyBg := zenAccent
-		copyFg := zenSelfBubbleInk
+		copyBg := p.AccentSolid
+		copyFg := p.SelfBubbleInk
 		copyIcon := iconCopy
 		copyText := t.CopyPairCode
 
 		if copyDisabled {
-			copyBg = zenInkMuted
+			copyBg = p.InkMuted
 		} else if copied {
-			copyBg = zenDirectText
+			copyBg = mygoui.Hex("#059669")
 			copyIcon = iconCheck
 			copyText = t.CopiedPairCode
 		} else if copyBtn.Pressed() {
-			copyBg = zenAccentPressed
+			copyBg = p.AccentPressed
 		} else if copyBtn.Hovered() {
-			copyBg = zenAccentHover
+			copyBg = p.AccentHover
 		}
 
 		copyBtn.Grow(1).
@@ -563,21 +606,21 @@ func (a *App) renderPairingQRTab(c *mygoui.Context, loc Locale) {
 		}
 
 		refreshBtn := mygoui.ButtonBase(c.Key("btn-refresh-pair"))
-		refBg := zenSurface
-		refFg := zenInkSecondary
+		refBg := p.Surface
+		refFg := p.InkSecondary
 		if !a.pairLoading {
 			if refreshBtn.Pressed() {
-				refBg = zenProgressTrack
-				refFg = zenInk
+				refBg = p.ProgressTrack
+				refFg = p.Ink
 			} else if refreshBtn.Hovered() {
-				refBg = zenInputFill
-				refFg = zenInk
+				refBg = p.SurfaceHover
+				refFg = p.Ink
 			}
 		}
 		refreshBtn.Size(38, 38).
 			Radius(99).
 			Background(refBg).
-			Border(1, zenBorderStrong).
+			Border(1, p.BorderStrong).
 			Justify(mygoui.Center).
 			AlignItems(mygoui.Center).
 			Disabled(a.pairLoading).
@@ -596,26 +639,31 @@ func (a *App) renderPairingQRTab(c *mygoui.Context, loc Locale) {
 }
 
 func (a *App) renderPairingJoinTab(c *mygoui.Context, loc Locale) {
+	p := zenPal(c)
 	t := tr(loc)
+	inputBg := p.Surface
+	if p.Dark {
+		inputBg = p.InputFill
+	}
 	mygoui.Column(c).
 		Padding(16).
 		Gap(12).
 		Radius(16).
-		Background(zenSurfaceSubtle).
-		Border(1, zenBorder).
+		Background(p.SurfaceSubtle).
+		Border(1, p.Border).
 		FillWidth().
 		Children(func() {
-			mygoui.Text(c, t.JoinGroupTitle).FontSize(13).Bold().TextColor(zenInk)
+			mygoui.Text(c, t.JoinGroupTitle).FontSize(13).Bold().TextColor(p.Ink)
 			mygoui.Text(c, t.JoinGroupDesc).
 				FontSize(12).
-				TextColor(zenInkSecondary).
+				TextColor(p.InkSecondary).
 				Wrap()
 
 			var in mygoui.Element
 			mygoui.Row(c).
 				Radius(12).
-				Background(zenSurface).
-				Border(1, zenBorderStrong).
+				Background(inputBg).
+				Border(1, p.BorderStrong).
 				Padding(9, 12).
 				AlignItems(mygoui.Center).
 				FillWidth().
@@ -625,30 +673,30 @@ func (a *App) renderPairingJoinTab(c *mygoui.Context, loc Locale) {
 						Label(t.PairingCodeLabel).
 						FillWidth().
 						FontSize(12.5).
-						TextColor(zenInk)
+						TextColor(p.Ink)
 				})
 
 			mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
 				pasteBtn := mygoui.ButtonBase(c.Key("btn-paste-pair"))
-				pasteBg := zenSurface
+				pasteBg := p.Surface
 				if pasteBtn.Pressed() {
-					pasteBg = zenInputFill
+					pasteBg = p.ProgressTrack
 				} else if pasteBtn.Hovered() {
-					pasteBg = zenSurfaceSubtle
+					pasteBg = p.SurfaceHover
 				}
 				pasteBtn.Height(38).
 					Padding(0, 14).
 					Gap(5).
 					Radius(99).
 					Background(pasteBg).
-					Border(1, zenBorderStrong).
+					Border(1, p.BorderStrong).
 					Justify(mygoui.Center).
 					AlignItems(mygoui.Center).
 					Cursor(mygoui.CursorPointer).
 					Label(t.PasteFromClipboard).
 					Children(func() {
-						mygoui.Icon(c, iconClipboard).Size(14, 14).TextColor(zenInk)
-						mygoui.Text(c, t.PasteFromClipboard).FontSize(12.5).FontWeight(600).TextColor(zenInk).NoWrap()
+						mygoui.Icon(c, iconClipboard).Size(14, 14).TextColor(p.Ink)
+						mygoui.Text(c, t.PasteFromClipboard).FontSize(12.5).FontWeight(600).TextColor(p.Ink).NoWrap()
 					})
 				if pasteBtn.Clicked() {
 					txt := ""
@@ -670,13 +718,13 @@ func (a *App) renderPairingJoinTab(c *mygoui.Context, loc Locale) {
 					joinLabel = t.Joining
 				}
 				joinBtn := mygoui.ButtonBase(c.Key("btn-join-group"))
-				joinBg := zenAccent
+				joinBg := p.AccentSolid
 				if !canJoin {
-					joinBg = zenInkMuted
+					joinBg = p.InkMuted
 				} else if joinBtn.Pressed() {
-					joinBg = zenAccentPressed
+					joinBg = p.AccentPressed
 				} else if joinBtn.Hovered() {
-					joinBg = zenAccentHover
+					joinBg = p.AccentHover
 				}
 				joinBtn.Grow(1).
 					Height(38).
@@ -691,7 +739,7 @@ func (a *App) renderPairingJoinTab(c *mygoui.Context, loc Locale) {
 					joinBtn.Cursor(mygoui.CursorPointer)
 				}
 				joinBtn.Children(func() {
-					mygoui.Text(c, joinLabel).FontSize(13).FontWeight(600).TextColor(zenSelfBubbleInk).NoWrap()
+					mygoui.Text(c, joinLabel).FontSize(13).FontWeight(600).TextColor(p.SelfBubbleInk).NoWrap()
 				})
 
 				if (joinBtn.Clicked() || in.Submitted()) && canJoin {
@@ -718,6 +766,7 @@ func (a *App) renderPairingJoinTab(c *mygoui.Context, loc Locale) {
 }
 
 func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev model.Device) {
+	p := zenPal(c)
 	t := tr(snap.Locale)
 	isSelf := dev.IsSelf || (snap.Identity.DeviceID != "" && dev.DeviceID == snap.Identity.DeviceID)
 	peer, hasPeer := snap.Peers[dev.DeviceID]
@@ -736,39 +785,39 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 	isExpanded := a.expandedDeviceID == dev.DeviceID
 
 	pillText := t.Offline
-	pillFg := zenInkMuted
-	pillBg := zenInputFill
+	pillFg := p.InkMuted
+	pillBg := p.InputFill
 	subText := ""
-	subColor := zenInkSecondary
+	subColor := p.InkSecondary
 	subMono := true
 
 	if hasPeer && peer.Connected {
 		switch peer.PathKind {
 		case model.ConnPathCustomDirect:
 			pillText = t.CustomDirect
-			pillFg = zenCustomDirect
-			pillBg = zenCustomDirectSoft
+			pillFg = p.CustomDirect
+			pillBg = p.CustomDirectSoft
 			subText = peer.Endpoint
 		case model.ConnPathLAN:
 			pillText = t.LANDirect
-			pillFg = zenLANDirect
-			pillBg = zenLANDirectSoft
+			pillFg = p.LANDirect
+			pillBg = p.LANDirectSoft
 			subText = peer.Endpoint
 		case model.ConnPathDirect:
 			pillText = t.P2PDirect
-			pillFg = zenDirectText
-			pillBg = zenDirectSoft
+			pillFg = p.DirectText
+			pillBg = p.DirectSoft
 			subText = peer.Endpoint
 		case model.ConnPathDERP:
 			pillText = t.DERPRelay
-			pillFg = zenDERPText
-			pillBg = zenDERPSoft
+			pillFg = p.DERPText
+			pillBg = p.DERPSoft
 			subText = peer.DERPRegion
 			subMono = false
 		default:
 			pillText = string(peer.PathKind)
-			pillFg = zenDirectText
-			pillBg = zenDirectSoft
+			pillFg = p.DirectText
+			pillBg = p.DirectSoft
 			subText = peer.Endpoint
 		}
 		if peer.LatencyMs > 0 {
@@ -787,16 +836,16 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 		}
 	} else if hasPeer && peer.PathKind == model.ConnPathConnecting {
 		pillText = t.Connecting
-		pillFg = zenInkSecondary
-		pillBg = zenInputFill
-		subColor = zenInkMuted
+		pillFg = p.InkSecondary
+		pillBg = p.InputFill
+		subColor = p.InkMuted
 		if customAddr != "" {
 			subText = fmt.Sprintf(t.CustomDirectTagF, customAddr)
 		} else {
 			subText = shortID(dev.DeviceID)
 		}
 	} else {
-		subColor = zenInkMuted
+		subColor = p.InkMuted
 		if customAddr != "" {
 			subText = fmt.Sprintf(t.CustomDirectTagF, customAddr)
 		} else {
@@ -809,12 +858,12 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 		Clip().
 		FillWidth()
 	if isExpanded {
-		card.Background(zenSurface).
-			Border(1, zenAccentBorder).
-			Shadow(0, 4, 14, 0, mygoui.RGBA(10, 132, 255, 0.08))
+		card.Background(p.Surface).
+			Border(1, p.AccentBorder).
+			Shadow(0, 4, 14, 0, p.ShadowCard)
 	} else {
-		card.Background(zenSurfaceSubtle).
-			Border(1, zenBorder)
+		card.Background(p.SurfaceSubtle).
+			Border(1, p.Border)
 	}
 
 	card.Children(func() {
@@ -830,7 +879,7 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 						mygoui.Text(c, title).
 							FontSize(12.5).
 							Bold().
-							TextColor(zenInk).
+							TextColor(p.Ink).
 							Shrink(1).
 							MinWidth(0).
 							SingleLine()
@@ -861,39 +910,39 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 				// Right action icon buttons: Direct IP accordion toggle + Remove device.
 				mygoui.Row(c).AlignItems(mygoui.Center).Gap(5).Shrink(0).Children(func() {
 					netBtn := mygoui.ButtonBase(c.Key("btn-dev-direct-" + dev.DeviceID))
-					netBg := zenSurface
-					netBorder := zenBorder
-					netFg := zenInkSecondary
+					netBg := p.Surface
+					netBorder := p.Border
+					netFg := p.InkSecondary
 					switch {
 					case isExpanded:
-						netBg = zenAccent
-						netBorder = zenAccent
-						netFg = zenSelfBubbleInk
+						netBg = p.AccentSolid
+						netBorder = p.AccentSolid
+						netFg = p.SelfBubbleInk
 						if netBtn.Pressed() {
-							netBg = zenAccentPressed
-							netBorder = zenAccentPressed
+							netBg = p.AccentPressed
+							netBorder = p.AccentPressed
 						} else if netBtn.Hovered() {
-							netBg = zenAccentHover
-							netBorder = zenAccentHover
+							netBg = p.AccentHover
+							netBorder = p.AccentHover
 						}
 					case customAddr != "":
-						netBg = zenCustomDirectSoft
-						netBorder = zenCustomDirectBorder
-						netFg = zenCustomDirect
+						netBg = p.CustomDirectSoft
+						netBorder = p.CustomDirectBorder
+						netFg = p.CustomDirect
 						if netBtn.Pressed() {
-							netBg = mygoui.RGBA(2, 132, 199, 0.24)
+							netBg = p.CustomDirect.Alpha(0.28)
 						} else if netBtn.Hovered() {
-							netBg = mygoui.RGBA(2, 132, 199, 0.18)
+							netBg = p.CustomDirect.Alpha(0.22)
 						}
 					default:
 						if netBtn.Pressed() {
-							netBg = zenProgressTrack
-							netBorder = zenBorderStrong
-							netFg = zenInk
+							netBg = p.ProgressTrack
+							netBorder = p.BorderStrong
+							netFg = p.Ink
 						} else if netBtn.Hovered() {
-							netBg = zenInputFill
-							netBorder = zenBorderStrong
-							netFg = zenInk
+							netBg = p.SurfaceHover
+							netBorder = p.BorderStrong
+							netFg = p.Ink
 						}
 					}
 					netBtn.Size(27, 27).
@@ -920,15 +969,15 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 					}
 
 					rmBtn := mygoui.ButtonBase(c.Key("revoke-" + dev.DeviceID))
-					rmBg := zenDangerSoft
-					rmBorder := mygoui.RGBA(239, 68, 68, 0.18)
-					rmFg := zenDanger
+					rmBg := p.DangerSoft
+					rmBorder := p.DangerBorder
+					rmFg := p.Danger
 					if rmBtn.Pressed() {
-						rmBg = mygoui.RGBA(239, 68, 68, 0.24)
-						rmFg = zenDangerDark
+						rmBg = p.DangerSoftPress
+						rmFg = p.DangerDark
 					} else if rmBtn.Hovered() {
-						rmBg = mygoui.RGBA(239, 68, 68, 0.18)
-						rmFg = zenDangerDark
+						rmBg = p.DangerSoftHover
+						rmFg = p.DangerDark
 					}
 					rmBtn.Size(27, 27).
 						Radius(8).
@@ -966,17 +1015,17 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 
 		// Option A: inline accordion drawer for per-device custom direct IP.
 		if isExpanded {
-			mygoui.Box(c).Height(1).FillWidth().Background(zenBorder)
+			mygoui.Box(c).Height(1).FillWidth().Background(p.Border)
 			mygoui.Column(c).
 				Padding(10).
 				Gap(7).
-				Background(zenAccordionBg).
+				Background(p.AccordionBg).
 				FillWidth().
 				Children(func() {
 					mygoui.Row(c).AlignItems(mygoui.Center).Gap(6).FillWidth().Children(func() {
-						mygoui.Text(c, t.DeviceDirectTitle).FontSize(11).FontWeight(600).TextColor(zenInkSecondary).NoWrap()
+						mygoui.Text(c, t.DeviceDirectTitle).FontSize(11).FontWeight(600).TextColor(p.InkSecondary).NoWrap()
 						mygoui.Spacer(c)
-						mygoui.Text(c, t.DeviceDirectHint).FontSize(10).TextColor(zenInkMuted).NoWrap()
+						mygoui.Text(c, t.DeviceDirectHint).FontSize(10).TextColor(p.InkMuted).NoWrap()
 					})
 
 					var ipInput mygoui.Element
@@ -988,13 +1037,13 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 							Grow(1)
 
 						saveBtn := mygoui.ButtonBase(c.Key("btn-dev-direct-save-" + dev.DeviceID))
-						saveBg := zenAccent
+						saveBg := p.AccentSolid
 						if a.deviceDirectSaving {
-							saveBg = zenInkMuted
+							saveBg = p.InkMuted
 						} else if saveBtn.Pressed() {
-							saveBg = zenAccentPressed
+							saveBg = p.AccentPressed
 						} else if saveBtn.Hovered() {
-							saveBg = zenAccentHover
+							saveBg = p.AccentHover
 						}
 						saveBtn.Height(30).
 							Padding(0, 11).
@@ -1009,25 +1058,25 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 							saveBtn.Cursor(mygoui.CursorPointer)
 						}
 						saveBtn.Children(func() {
-							mygoui.Text(c, t.DeviceDirectSave).FontSize(11.5).FontWeight(600).TextColor(zenSelfBubbleInk).NoWrap()
+							mygoui.Text(c, t.DeviceDirectSave).FontSize(11.5).FontWeight(600).TextColor(p.SelfBubbleInk).NoWrap()
 						})
 						saveClicked = saveBtn.Clicked()
 
 						if customAddr != "" {
 							resetBtn := mygoui.ButtonBase(c.Key("btn-dev-direct-reset-" + dev.DeviceID))
-							resetBg := zenSurface
+							resetBg := p.Surface
 							if !a.deviceDirectSaving {
 								if resetBtn.Pressed() {
-									resetBg = zenProgressTrack
+									resetBg = p.ProgressTrack
 								} else if resetBtn.Hovered() {
-									resetBg = zenInputFill
+									resetBg = p.SurfaceHover
 								}
 							}
 							resetBtn.Height(30).
 								Padding(0, 9).
 								Radius(8).
 								Background(resetBg).
-								Border(1, zenBorderStrong).
+								Border(1, p.BorderStrong).
 								Justify(mygoui.Center).
 								AlignItems(mygoui.Center).
 								Shrink(0).
@@ -1037,7 +1086,7 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 								resetBtn.Cursor(mygoui.CursorPointer)
 							}
 							resetBtn.Children(func() {
-								mygoui.Text(c, t.DeviceDirectReset).FontSize(11.5).FontWeight(600).TextColor(zenInkSecondary).NoWrap()
+								mygoui.Text(c, t.DeviceDirectReset).FontSize(11.5).FontWeight(600).TextColor(p.InkSecondary).NoWrap()
 							})
 							resetClicked = resetBtn.Clicked()
 						}
@@ -1057,21 +1106,21 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 							maxChips = 2
 						}
 						mygoui.Row(c).AlignItems(mygoui.Center).Gap(5).Wrap().FillWidth().Children(func() {
-							mygoui.Text(c, t.DeviceAutoLANLabel).FontSize(10.5).TextColor(zenInkMuted).NoWrap()
+							mygoui.Text(c, t.DeviceAutoLANLabel).FontSize(10.5).TextColor(p.InkMuted).NoWrap()
 							for i := 0; i < maxChips; i++ {
 								addr := dev.DirectAddrs[i]
 								chip := mygoui.ButtonBase(c.Key(fmt.Sprintf("btn-dev-lan-chip-%s-%d", dev.DeviceID, i)))
-								chipBg := zenSurface
-								chipBorder := zenBorderStrong
-								chipFg := zenInkSecondary
+								chipBg := p.Surface
+								chipBorder := p.BorderStrong
+								chipFg := p.InkSecondary
 								if chip.Pressed() {
-									chipBg = zenAccentSoft
-									chipBorder = zenAccent
-									chipFg = zenAccent
+									chipBg = p.AccentSoftPress
+									chipBorder = p.Accent
+									chipFg = p.Accent
 								} else if chip.Hovered() {
-									chipBg = zenAccentSoft
-									chipBorder = zenAccentBorder
-									chipFg = zenAccent
+									chipBg = p.AccentSoft
+									chipBorder = p.AccentBorder
+									chipFg = p.Accent
 								}
 								chip.Padding(2, 7).
 									Radius(99).
@@ -1098,7 +1147,7 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 					}
 
 					if a.deviceDirectErr != "" {
-						mygoui.Text(c, a.deviceDirectErr).FontSize(11).TextColor(zenDangerDark).Wrap().FillWidth()
+						mygoui.Text(c, a.deviceDirectErr).FontSize(11).TextColor(p.DangerDark).Wrap().FillWidth()
 					}
 				})
 		}
@@ -1106,15 +1155,16 @@ func (a *App) renderPopoverDeviceCard(c *mygoui.Context, snap ViewSnapshot, dev 
 }
 
 func (a *App) renderPopoverSelfCard(c *mygoui.Context, snap ViewSnapshot, dev model.Device, title string, t uiStrings) {
+	p := zenPal(c)
 	hasLAN := !snap.Config.DirectListenDisabled && len(snap.LocalDirectAddrs) > 0
 
 	subText := shortID(dev.DeviceID)
-	subColor := zenInkMuted
+	subColor := p.InkMuted
 	subMono := true
 	subTip := ""
 	if hasLAN {
 		subText = "LAN " + snap.LocalDirectAddrs[0]
-		subColor = zenInkSecondary
+		subColor = p.InkSecondary
 		subTip = strings.Join(snap.LocalDirectAddrs, "\n")
 	} else if snap.Config.DirectListenDisabled {
 		subText = t.DirectListenerOff
@@ -1125,8 +1175,8 @@ func (a *App) renderPopoverSelfCard(c *mygoui.Context, snap ViewSnapshot, dev mo
 		Padding(9, 10).
 		Gap(8).
 		Radius(12).
-		Background(zenSurfaceSubtle).
-		Border(1, zenBorder).
+		Background(p.SurfaceSubtle).
+		Border(1, p.Border).
 		AlignItems(mygoui.Center).
 		FillWidth().
 		Children(func() {
@@ -1135,20 +1185,20 @@ func (a *App) renderPopoverSelfCard(c *mygoui.Context, snap ViewSnapshot, dev mo
 					mygoui.Text(c, title).
 						FontSize(12.5).
 						Bold().
-						TextColor(zenInk).
+						TextColor(p.Ink).
 						Shrink(1).
 						MinWidth(0).
 						SingleLine()
 					mygoui.Row(c).
 						Padding(1.5, 6).
 						Radius(99).
-						Background(zenAccentSoft).
+						Background(p.AccentSoft).
 						Shrink(0).
 						Children(func() {
 							mygoui.Text(c, t.ThisDevice).
 								FontSize(10).
 								FontWeight(650).
-								TextColor(zenAccent).
+								TextColor(p.Accent).
 								NoWrap()
 						})
 				})
@@ -1169,21 +1219,21 @@ func (a *App) renderPopoverSelfCard(c *mygoui.Context, snap ViewSnapshot, dev mo
 			if hasLAN {
 				primary := snap.LocalDirectAddrs[0]
 				copyBtn := mygoui.ButtonBase(c.Key("btn-popover-copy-lan"))
-				copyBg := zenSurface
-				copyFg := zenInkSecondary
+				copyBg := p.Surface
+				copyFg := p.InkSecondary
 				if copyBtn.Pressed() {
-					copyBg = zenProgressTrack
-					copyFg = zenInk
+					copyBg = p.ProgressTrack
+					copyFg = p.Ink
 				} else if copyBtn.Hovered() {
-					copyBg = zenInputFill
-					copyFg = zenInk
+					copyBg = p.SurfaceHover
+					copyFg = p.Ink
 				}
 				copyBtn.Height(24).
 					Padding(0, 8).
 					Gap(4).
 					Radius(99).
 					Background(copyBg).
-					Border(1, zenBorderStrong).
+					Border(1, p.BorderStrong).
 					Justify(mygoui.Center).
 					AlignItems(mygoui.Center).
 					Shrink(0).
@@ -1210,6 +1260,8 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 		return
 	}
 
+	p := zenPal(c)
+
 	// Apply any directory path chosen asynchronously by the native folder picker.
 	a.pendingDirMu.Lock()
 	if a.pendingDownloadDir != nil {
@@ -1228,20 +1280,20 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 	}
 
 	mygoui.DialogBase(c.Key("modal-settings"), openPtr, func(backdrop, panel mygoui.Element) {
-		backdrop.Background(mygoui.RGBA(15, 23, 42, 0.32))
+		backdrop.Background(p.Backdrop)
 		panel.Width(480).
 			Height(616).
 			MaxHeightPercent(92).
 			Padding(18, 18).
 			Radius(18).
-			Background(zenSurface).
-			Border(1, zenBorder).
-			Shadow(0, 20, 48, 0, mygoui.RGBA(15, 23, 42, 0.22))
+			Background(p.Surface).
+			Border(1, p.Border).
+			Shadow(0, 20, 48, 0, p.ShadowModal)
 
 		mygoui.Column(c).Gap(14).Fill().Children(func() {
 			// Modal header: Settings title + close button.
 			mygoui.Row(c).AlignItems(mygoui.Center).FillWidth().Shrink(0).Children(func() {
-				mygoui.Text(c, t.SettingsTitle).FontSize(16).Bold().TextColor(zenInk)
+				mygoui.Text(c, t.SettingsTitle).FontSize(16).Bold().TextColor(p.Ink)
 				mygoui.Spacer(c)
 				if zenCircleBtn(c, "settings-x", iconX, t.CloseSettings, false).Clicked() {
 					a.settingsOpen = false
@@ -1281,22 +1333,24 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 }
 
 func settingsSectionCard(c *mygoui.Context, body func()) {
+	p := zenPal(c)
 	mygoui.Column(c).
 		Padding(12, 12).
 		Gap(10).
 		Radius(13).
-		Background(zenSurfaceSubtle).
-		Border(1, zenBorder).
+		Background(p.SurfaceSubtle).
+		Border(1, p.Border).
 		FillWidth().
 		Children(body)
 }
 
 func (a *App) renderSettingsGeneralTab(c *mygoui.Context, t uiStrings) {
+	p := zenPal(c)
 	mygoui.Column(c).Gap(10).FillWidth().Children(func() {
-		// Identity & Language card.
+		// Identity, Language & Appearance card.
 		settingsSectionCard(c, func() {
 			mygoui.Column(c).Gap(5).FillWidth().Children(func() {
-				mygoui.Text(c, t.DeviceName).FontSize(12).FontWeight(600).TextColor(zenInk)
+				mygoui.Text(c, t.DeviceName).FontSize(12).FontWeight(600).TextColor(p.Ink)
 				mygoui.TextInput(c.Key("set-device-name"), &a.settingsDraft.DeviceName).
 					Placeholder(t.MyDevicePlace).
 					Label(t.DeviceName).
@@ -1304,12 +1358,21 @@ func (a *App) renderSettingsGeneralTab(c *mygoui.Context, t uiStrings) {
 			})
 
 			mygoui.Column(c).Gap(5).FillWidth().Children(func() {
-				mygoui.Text(c, t.Language).FontSize(12).FontWeight(600).TextColor(zenInk)
+				mygoui.Text(c, t.Language).FontSize(12).FontWeight(600).TextColor(p.Ink)
 				mygoui.Segmented(c.Key("set-language"), &a.settingsDraft.LanguageIdx,
 					t.LanguageAuto,
 					t.LanguageEnglish,
 					t.LanguageChinese,
 				).Label(t.Language).FillEqually()
+			})
+
+			mygoui.Column(c).Gap(5).FillWidth().Children(func() {
+				mygoui.Text(c, t.Appearance).FontSize(12).FontWeight(600).TextColor(p.Ink)
+				mygoui.Segmented(c.Key("set-theme"), &a.settingsDraft.ThemeIdx,
+					t.ThemeAuto,
+					t.ThemeLight,
+					t.ThemeDark,
+				).Label(t.Appearance).FillEqually()
 			})
 		})
 
@@ -1323,14 +1386,14 @@ func (a *App) renderSettingsGeneralTab(c *mygoui.Context, t uiStrings) {
 			Padding(11, 14).
 			Gap(10).
 			Radius(13).
-			Background(zenDangerSoft).
-			Border(1, mygoui.RGBA(239, 68, 68, 0.22)).
+			Background(p.DangerSoft).
+			Border(1, p.DangerBorder).
 			AlignItems(mygoui.Center).
 			FillWidth().
 			Children(func() {
 				mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-					mygoui.Text(c, t.ClearHistoryTitle).FontSize(12).Bold().TextColor(zenDangerDark)
-					mygoui.Text(c, t.ClearHistoryNote).FontSize(11).TextColor(zenInkSecondary).Wrap()
+					mygoui.Text(c, t.ClearHistoryTitle).FontSize(12).Bold().TextColor(p.DangerDark)
+					mygoui.Text(c, t.ClearHistoryNote).FontSize(11).TextColor(p.InkSecondary).Wrap()
 				})
 
 				if zenDangerPillBtn(c, "btn-clear-history", t.ClearAllBtn).Clicked() {
@@ -1341,11 +1404,12 @@ func (a *App) renderSettingsGeneralTab(c *mygoui.Context, t uiStrings) {
 }
 
 func (a *App) renderSettingsTransferTab(c *mygoui.Context, t uiStrings) {
+	p := zenPal(c)
 	mygoui.Column(c).Gap(10).FillWidth().Children(func() {
 		// File Storage Path card.
 		settingsSectionCard(c, func() {
 			mygoui.Column(c).Gap(6).FillWidth().Children(func() {
-				mygoui.Text(c, t.DownloadDirLabel).FontSize(12).FontWeight(600).TextColor(zenInk)
+				mygoui.Text(c, t.DownloadDirLabel).FontSize(12).FontWeight(600).TextColor(p.Ink)
 				mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
 					mygoui.TextInput(c.Key("set-download-dir"), &a.settingsDraft.DownloadDir).
 						Placeholder(t.DownloadDirPlace).
@@ -1355,7 +1419,7 @@ func (a *App) renderSettingsTransferTab(c *mygoui.Context, t uiStrings) {
 						a.triggerChooseDownloadDir()
 					}
 				})
-				mygoui.Text(c, t.DownloadDirHint).FontSize(11).TextColor(zenInkMuted).Wrap()
+				mygoui.Text(c, t.DownloadDirHint).FontSize(11).TextColor(p.InkMuted).Wrap()
 			})
 		})
 
@@ -1363,38 +1427,39 @@ func (a *App) renderSettingsTransferTab(c *mygoui.Context, t uiStrings) {
 		settingsSectionCard(c, func() {
 			mygoui.Row(c).Gap(10).FillWidth().Children(func() {
 				mygoui.Column(c).Gap(5).Grow(1).Children(func() {
-					mygoui.Text(c, t.AutoDownloadMB).FontSize(12).FontWeight(600).TextColor(zenInk)
+					mygoui.Text(c, t.AutoDownloadMB).FontSize(12).FontWeight(600).TextColor(p.Ink)
 					mygoui.TextInput(c.Key("set-autodl-mb"), &a.settingsDraft.AutoDownloadMBStr).
 						Placeholder("20").
 						Label(t.AutoDownloadMB).
 						FillWidth()
 				})
 				mygoui.Column(c).Gap(5).Grow(1).Children(func() {
-					mygoui.Text(c, t.DownloadLimitKBs).FontSize(12).FontWeight(600).TextColor(zenInk)
+					mygoui.Text(c, t.DownloadLimitKBs).FontSize(12).FontWeight(600).TextColor(p.Ink)
 					mygoui.TextInput(c.Key("set-rate-kbs"), &a.settingsDraft.RateLimitKBsStr).
 						Placeholder("0").
 						Label(t.DownloadLimitKBs).
 						FillWidth()
 				})
 			})
-			mygoui.Text(c, t.TransferPolicyHint).FontSize(11).TextColor(zenInkMuted).Wrap()
+			mygoui.Text(c, t.TransferPolicyHint).FontSize(11).TextColor(p.InkMuted).Wrap()
 		})
 	})
 }
 
 func (a *App) renderSettingsNetworkTab(c *mygoui.Context, snap ViewSnapshot, t uiStrings) {
+	p := zenPal(c)
 	mygoui.Column(c).Gap(10).Padding(0, 0, 8, 0).FillWidth().Children(func() {
 		// Card 1: LAN & Custom Direct TCP+mTLS card.
 		settingsSectionCard(c, func() {
 			mygoui.Column(c).Gap(3).FillWidth().Children(func() {
-				mygoui.Text(c, t.DirectConnTitle).FontSize(12.5).Bold().TextColor(zenInk)
-				mygoui.Text(c, t.DirectConnHint).FontSize(11).TextColor(zenInkMuted).Wrap()
+				mygoui.Text(c, t.DirectConnTitle).FontSize(12.5).Bold().TextColor(p.Ink)
+				mygoui.Text(c, t.DirectConnHint).FontSize(11).TextColor(p.InkMuted).Wrap()
 			})
 
 			mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
 				mygoui.Checkbox(c.Key("set-direct-enable"), &a.settingsDraft.DirectListenEnabled, t.DirectListenEnable)
 				mygoui.Spacer(c)
-				mygoui.Text(c, t.DirectListenPort).FontSize(11.5).TextColor(zenInkSecondary).NoWrap()
+				mygoui.Text(c, t.DirectListenPort).FontSize(11.5).TextColor(p.InkSecondary).NoWrap()
 				mygoui.TextInput(c.Key("set-direct-port"), &a.settingsDraft.DirectListenPortStr).
 					Placeholder("19840").
 					Label(t.DirectListenPort).
@@ -1412,16 +1477,16 @@ func (a *App) renderSettingsNetworkTab(c *mygoui.Context, snap ViewSnapshot, t u
 					Padding(6, 9).
 					Gap(8).
 					Radius(9).
-					Background(zenSurface).
-					Border(1, zenBorder).
+					Background(p.Surface).
+					Border(1, p.Border).
 					AlignItems(mygoui.Center).
 					FillWidth().
 					Children(func() {
-						mygoui.Text(c, t.LocalLANAddrsLabel).FontSize(11).FontWeight(600).TextColor(zenInkSecondary).NoWrap()
+						mygoui.Text(c, t.LocalLANAddrsLabel).FontSize(11).FontWeight(600).TextColor(p.InkSecondary).NoWrap()
 						mygoui.Text(c, summary).
 							FontSize(11).
 							Font("SF Mono, Menlo, monospace").
-							TextColor(zenInk).
+							TextColor(p.Ink).
 							Grow(1).
 							MinWidth(0).
 							SingleLine().
@@ -1436,14 +1501,14 @@ func (a *App) renderSettingsNetworkTab(c *mygoui.Context, snap ViewSnapshot, t u
 					})
 			}
 
-			mygoui.Text(c, t.SettingsPeerIPMovedHint).FontSize(11).TextColor(zenInkMuted).Wrap()
+			mygoui.Text(c, t.SettingsPeerIPMovedHint).FontSize(11).TextColor(p.InkMuted).Wrap()
 		})
 
 		// Card 2: DERP Relay fallback server card.
 		settingsSectionCard(c, func() {
 			mygoui.Column(c).Gap(3).FillWidth().Children(func() {
-				mygoui.Text(c, t.DERPServer).FontSize(12.5).Bold().TextColor(zenInk)
-				mygoui.Text(c, t.DERPHint).FontSize(11).TextColor(zenInkMuted).Wrap()
+				mygoui.Text(c, t.DERPServer).FontSize(12.5).Bold().TextColor(p.Ink)
+				mygoui.Text(c, t.DERPHint).FontSize(11).TextColor(p.InkMuted).Wrap()
 			})
 
 			mygoui.Segmented(c.Key("set-derp-mode"), &a.settingsDraft.DERPModeIdx,
@@ -1455,7 +1520,7 @@ func (a *App) renderSettingsNetworkTab(c *mygoui.Context, snap ViewSnapshot, t u
 			switch a.settingsDraft.DERPModeIdx {
 			case 0:
 				mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
-					mygoui.Text(c, t.PreferredRegionID).FontSize(12).TextColor(zenInkSecondary)
+					mygoui.Text(c, t.PreferredRegionID).FontSize(12).TextColor(p.InkSecondary)
 					mygoui.TextInput(c.Key("set-region-id"), &a.settingsDraft.RegionIDStr).
 						Placeholder("304").
 						Label("Region ID").
@@ -1504,11 +1569,12 @@ func (a *App) renderSettingsNetworkTab(c *mygoui.Context, snap ViewSnapshot, t u
 }
 
 func (a *App) renderSettingsSaveFooter(c *mygoui.Context, t uiStrings) {
+	p := zenPal(c)
 	if a.settingsErr != "" {
-		mygoui.Text(c, a.settingsErr).FontSize(12).TextColor(zenDanger).Wrap().Shrink(0)
+		mygoui.Text(c, a.settingsErr).FontSize(12).TextColor(p.Danger).Wrap().Shrink(0)
 	}
 
-	mygoui.Box(c).Height(1).FillWidth().Shrink(0).Background(zenBorder)
+	mygoui.Box(c).Height(1).FillWidth().Shrink(0).Background(p.Border)
 
 	mygoui.Row(c).Gap(8).Justify(mygoui.End).FillWidth().Shrink(0).Children(func() {
 		if zenPillBtn(c, "settings-close", t.Close, false, a.settingsSaving).Clicked() && !a.settingsSaving {
@@ -1526,6 +1592,7 @@ func (a *App) renderSettingsSaveFooter(c *mygoui.Context, t uiStrings) {
 }
 
 func (a *App) renderSettingsAboutTab(c *mygoui.Context, snap ViewSnapshot, t uiStrings) {
+	p := zenPal(c)
 	up := snap.Update
 	ver := strings.TrimSpace(up.CurrentVersion)
 	if ver == "" {
@@ -1545,22 +1612,22 @@ func (a *App) renderSettingsAboutTab(c *mygoui.Context, snap ViewSnapshot, t uiS
 						Size(68, 68).
 						Radius(16).
 						Clip().
-						Shadow(0, 8, 22, 0, mygoui.RGBA(15, 23, 42, 0.14)).
+						Shadow(0, 8, 22, 0, p.ShadowCard).
 						Children(func() {
 							mygoui.Image(c, iconSrc).Size(68, 68).Fit(mygoui.Cover)
 						})
 				}
 
-				mygoui.Text(c, "TailChat").FontSize(18).Bold().TextColor(zenInk)
-				mygoui.Text(c, t.AppTagline).FontSize(12).TextColor(zenInkSecondary)
+				mygoui.Text(c, "TailChat").FontSize(18).Bold().TextColor(p.Ink)
+				mygoui.Text(c, t.AppTagline).FontSize(12).TextColor(p.InkSecondary)
 
 				mygoui.Row(c).
 					Padding(3, 10).
 					Radius(99).
-					Background(zenInputFill).
-					Border(1, zenBorder).
+					Background(p.InputFill).
+					Border(1, p.Border).
 					Children(func() {
-						mygoui.Text(c, "v"+ver).FontSize(11.5).FontWeight(600).TextColor(zenInkSecondary).NoWrap()
+						mygoui.Text(c, "v"+ver).FontSize(11.5).FontWeight(600).TextColor(p.InkSecondary).NoWrap()
 					})
 			})
 
@@ -1569,37 +1636,37 @@ func (a *App) renderSettingsAboutTab(c *mygoui.Context, snap ViewSnapshot, t uiS
 			Padding(12, 14).
 			Gap(10).
 			Radius(14).
-			Background(zenSurfaceSubtle).
-			Border(1, zenBorder).
+			Background(p.SurfaceSubtle).
+			Border(1, p.Border).
 			AlignItems(mygoui.Center).
 			FillWidth().
 			Children(func() {
 				mygoui.Row(c).
 					Size(34, 34).
 					Radius(10).
-					Background(zenAccentSoft).
+					Background(p.AccentSoft).
 					Justify(mygoui.Center).
 					AlignItems(mygoui.Center).
 					Children(func() {
-						mygoui.Icon(c, iconSparkles).Size(16, 16).TextColor(zenAccent)
+						mygoui.Icon(c, iconSparkles).Size(16, 16).TextColor(p.Accent)
 					})
 
 				mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-					mygoui.Text(c, t.SoftwareUpdates).FontSize(12.5).Bold().TextColor(zenInk)
+					mygoui.Text(c, t.SoftwareUpdates).FontSize(12.5).Bold().TextColor(p.Ink)
 					statusLine := fmt.Sprintf(t.CurrentVersionF, ver)
-					statusColor := zenInkSecondary
+					statusColor := p.InkSecondary
 					switch {
 					case up.Checking:
 						statusLine = t.CheckingUpdates
 					case up.Available && up.LatestVersion != "":
 						statusLine = fmt.Sprintf(t.UpdateAvailableF, up.LatestVersion)
-						statusColor = zenAccent
+						statusColor = p.Accent
 					case up.LastError != "":
 						statusLine = t.UpdateCheckFailedPref + up.LastError
-						statusColor = zenDanger
+						statusColor = p.Danger
 					case up.UpToDate:
 						statusLine = t.UpToDate
-						statusColor = zenDirectText
+						statusColor = p.DirectText
 					}
 					mygoui.Text(c, statusLine).
 						FontSize(11.5).
@@ -1626,17 +1693,17 @@ func (a *App) renderSettingsAboutTab(c *mygoui.Context, snap ViewSnapshot, t uiS
 
 		// GitHub Repository card.
 		ghBtn := mygoui.ButtonBase(c.Key("btn-open-github"))
-		ghBg := zenSurfaceSubtle
+		ghBg := p.SurfaceSubtle
 		if ghBtn.Pressed() {
-			ghBg = zenInputFill
+			ghBg = p.ProgressTrack
 		} else if ghBtn.Hovered() {
-			ghBg = zenSurfaceHover
+			ghBg = p.SurfaceHover
 		}
 		ghBtn.Padding(12, 14).
 			Gap(10).
 			Radius(14).
 			Background(ghBg).
-			Border(1, zenBorder).
+			Border(1, p.Border).
 			AlignItems(mygoui.Center).
 			FillWidth().
 			Cursor(mygoui.CursorPointer).
@@ -1646,31 +1713,31 @@ func (a *App) renderSettingsAboutTab(c *mygoui.Context, snap ViewSnapshot, t uiS
 				mygoui.Row(c).
 					Size(34, 34).
 					Radius(10).
-					Background(zenSurface).
-					Border(1, zenBorder).
+					Background(p.Surface).
+					Border(1, p.Border).
 					Justify(mygoui.Center).
 					AlignItems(mygoui.Center).
 					Shrink(0).
 					Children(func() {
-						mygoui.Icon(c, iconGitHub).Size(17, 17).TextColor(zenInk)
+						mygoui.Icon(c, iconGitHub).Size(17, 17).TextColor(p.Ink)
 					})
 
 				mygoui.Column(c).Grow(1).MinWidth(0).Clip().Gap(2).Children(func() {
-					mygoui.Text(c, t.GitHubRepoLabel).FontSize(12.5).Bold().TextColor(zenInk)
+					mygoui.Text(c, t.GitHubRepoLabel).FontSize(12.5).Bold().TextColor(p.Ink)
 					mygoui.Text(c, "github.com/jae-jae/tailchat").
 						FontSize(11.5).
-						TextColor(zenInkSecondary).
+						TextColor(p.InkSecondary).
 						FillWidth().
 						SingleLine()
 				})
 
-				mygoui.Icon(c, iconExternalLink).Size(15, 15).TextColor(zenInkMuted)
+				mygoui.Icon(c, iconExternalLink).Size(15, 15).TextColor(p.InkMuted)
 			})
 		if ghBtn.Clicked() {
 			a.triggerOpenExternalURL(tailchatGitHubURL)
 		}
 
-		// Footer on Tab 1.
+		// Footer on Tab 4.
 		mygoui.Row(c).Gap(8).Justify(mygoui.End).FillWidth().Children(func() {
 			if zenPillBtn(c, "settings-about-close", t.Close, false, false).Clicked() {
 				a.settingsOpen = false
@@ -1709,38 +1776,39 @@ func (a *App) renderClearConfirmModal(c *mygoui.Context, snap ViewSnapshot) {
 	if !a.clearConfirmOpen {
 		return
 	}
+	p := zenPal(c)
 	t := tr(a.settingsDraft.SelectedLocale())
 	if !a.settingsOpen {
 		t = tr(snap.Locale)
 	}
 
 	mygoui.DialogBase(c.Key("modal-clear-confirm"), &a.clearConfirmOpen, func(backdrop, panel mygoui.Element) {
-		backdrop.Background(mygoui.RGBA(15, 23, 42, 0.48))
+		backdrop.Background(p.BackdropStrong)
 		panel.Width(380).
 			MaxWidthPercent(90).
 			Padding(20).
 			Radius(18).
-			Background(zenSurface).
-			Border(1, mygoui.RGBA(239, 68, 68, 0.28)).
-			Shadow(0, 24, 56, 0, mygoui.RGBA(15, 23, 42, 0.28))
+			Background(p.Surface).
+			Border(1, p.DangerBorder).
+			Shadow(0, 24, 56, 0, p.ShadowModal)
 
 		mygoui.Column(c).Gap(14).FillWidth().Children(func() {
 			mygoui.Row(c).Gap(11).AlignItems(mygoui.Center).FillWidth().Children(func() {
 				mygoui.Row(c).
 					Size(36, 36).
 					Radius(11).
-					Background(zenDangerSoft).
+					Background(p.DangerSoft).
 					Justify(mygoui.Center).
 					AlignItems(mygoui.Center).
 					Children(func() {
-						mygoui.Icon(c, iconAlertTriangle).Size(18, 18).TextColor(zenDanger)
+						mygoui.Icon(c, iconAlertTriangle).Size(18, 18).TextColor(p.Danger)
 					})
-				mygoui.Text(c, t.ClearConfirmTitle).FontSize(15).Bold().TextColor(zenInk).Grow(1).Wrap()
+				mygoui.Text(c, t.ClearConfirmTitle).FontSize(15).Bold().TextColor(p.Ink).Grow(1).Wrap()
 			})
 
 			mygoui.Text(c, t.ClearConfirmBody).
 				FontSize(12.5).
-				TextColor(zenInkSecondary).
+				TextColor(p.InkSecondary).
 				Wrap().
 				FillWidth()
 

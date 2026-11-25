@@ -284,10 +284,30 @@ func NormalizeLanguage(lang string) string {
 	}
 }
 
+// Theme preference values for AppConfig.Theme.
+const (
+	ThemeAuto  = "auto"
+	ThemeLight = "light"
+	ThemeDark  = "dark"
+)
+
+// NormalizeTheme canonicalizes a stored theme preference into "auto", "light", or "dark".
+func NormalizeTheme(theme string) string {
+	switch strings.ToLower(strings.TrimSpace(theme)) {
+	case ThemeLight:
+		return ThemeLight
+	case ThemeDark:
+		return ThemeDark
+	default:
+		return ThemeAuto
+	}
+}
+
 // AppConfig holds user-editable runtime settings.
 type AppConfig struct {
 	DeviceName           string            `json:"device_name"`
 	Language             string            `json:"language,omitempty"` // "auto" (default, fallback en), "en", "zh"
+	Theme                string            `json:"theme,omitempty"`    // "auto" (default, follow system), "light", "dark"
 	DERP                 DERPConfig        `json:"derp"`
 	DirectListenPort     int               `json:"direct_listen_port,omitempty"`     // 0 = DefaultDirectPort (19840)
 	DirectListenDisabled bool              `json:"direct_listen_disabled,omitempty"` // true disables LAN/custom TCP direct listener

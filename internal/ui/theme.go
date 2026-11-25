@@ -5,83 +5,297 @@ import (
 	"strings"
 
 	mygoui "github.com/egoist/mygo/ui"
+
+	"tailchat/internal/model"
 )
 
-// Zen Popover (Scheme C) color tokens derived from tokens.css.
+// zenPalette holds all semantic color tokens for a light or dark Zen Popover appearance.
+type zenPalette struct {
+	Dark bool
+
+	Bg            mygoui.Color
+	Surface       mygoui.Color
+	SurfaceSubtle mygoui.Color
+	SurfaceHover  mygoui.Color
+	InputFill     mygoui.Color
+	ControlActive mygoui.Color
+
+	Border       mygoui.Color
+	BorderStrong mygoui.Color
+
+	Ink          mygoui.Color
+	InkSecondary mygoui.Color
+	InkMuted     mygoui.Color
+
+	SelfBubbleBg  mygoui.Color
+	SelfBubbleInk mygoui.Color
+
+	Accent          mygoui.Color
+	AccentSolid     mygoui.Color
+	AccentHover     mygoui.Color
+	AccentPressed   mygoui.Color
+	AccentSoft      mygoui.Color
+	AccentSoftHover mygoui.Color
+	AccentSoftPress mygoui.Color
+	AccentBorder    mygoui.Color
+
+	CustomDirect       mygoui.Color
+	CustomDirectSoft   mygoui.Color
+	CustomDirectBorder mygoui.Color
+
+	LANDirect     mygoui.Color
+	LANDirectSoft mygoui.Color
+
+	Direct     mygoui.Color
+	DirectText mygoui.Color
+	DirectSoft mygoui.Color
+
+	DERP     mygoui.Color
+	DERPText mygoui.Color
+	DERPSoft mygoui.Color
+
+	Offline          mygoui.Color
+	Danger           mygoui.Color
+	DangerDark       mygoui.Color
+	DangerSolid      mygoui.Color
+	DangerSolidHover mygoui.Color
+	DangerSolidPress mygoui.Color
+	DangerSoft       mygoui.Color
+	DangerSoftHover  mygoui.Color
+	DangerSoftPress  mygoui.Color
+	DangerBorder     mygoui.Color
+
+	AccordionBg   mygoui.Color
+	ProgressTrack mygoui.Color
+	TimeChipBg    mygoui.Color
+	WinBtnHover   mygoui.Color
+	WinBtnPressed mygoui.Color
+	DropHintBg    mygoui.Color
+
+	Backdrop       mygoui.Color
+	BackdropStrong mygoui.Color
+	ShadowSoft     mygoui.Color
+	ShadowCard     mygoui.Color
+	ShadowPopover  mygoui.Color
+	ShadowModal    mygoui.Color
+
+	ToastBg     mygoui.Color
+	ToastBorder mygoui.Color
+	QRCardBg    mygoui.Color
+	Scrollbar   mygoui.Color
+}
+
+// Scheme C · Zen Popover palettes (Light + Zen Slate Dark).
 var (
-	zenBg            = mygoui.Hex("#F3F5F9")
-	zenSurface       = mygoui.Hex("#FFFFFF")
-	zenSurfaceSubtle = mygoui.Hex("#F8FAFC")
-	zenSurfaceHover  = mygoui.Hex("#EEF2F7")
-	zenInputFill     = mygoui.Hex("#F1F5F9")
+	zenLightPalette = &zenPalette{
+		Dark: false,
 
-	zenBorder       = mygoui.RGBA(15, 23, 42, 0.08)
-	zenBorderStrong = mygoui.RGBA(15, 23, 42, 0.14)
+		Bg:            mygoui.Hex("#F3F5F9"),
+		Surface:       mygoui.Hex("#FFFFFF"),
+		SurfaceSubtle: mygoui.Hex("#F8FAFC"),
+		SurfaceHover:  mygoui.Hex("#EEF2F7"),
+		InputFill:     mygoui.Hex("#F1F5F9"),
+		ControlActive: mygoui.Hex("#F1F5F9"),
 
-	zenInk          = mygoui.Hex("#0F172A")
-	zenInkSecondary = mygoui.Hex("#475569")
-	zenInkMuted     = mygoui.Hex("#94A3B8")
+		Border:       mygoui.RGBA(15, 23, 42, 0.08),
+		BorderStrong: mygoui.RGBA(15, 23, 42, 0.14),
 
-	zenSelfBubbleBg  = mygoui.Hex("#0F172A")
-	zenSelfBubbleInk = mygoui.Hex("#FFFFFF")
+		Ink:          mygoui.Hex("#0F172A"),
+		InkSecondary: mygoui.Hex("#475569"),
+		InkMuted:     mygoui.Hex("#94A3B8"),
 
-	zenAccent        = mygoui.Hex("#0A84FF")
-	zenAccentHover   = mygoui.Hex("#0070E0")
-	zenAccentPressed = mygoui.Hex("#005BBF")
-	zenAccentSoft    = mygoui.RGBA(10, 132, 255, 0.11)
-	zenAccentBorder  = mygoui.RGBA(10, 132, 255, 0.28)
+		SelfBubbleBg:  mygoui.Hex("#0F172A"),
+		SelfBubbleInk: mygoui.Hex("#FFFFFF"),
 
-	zenCustomDirect       = mygoui.Hex("#0284C7")
-	zenCustomDirectSoft   = mygoui.RGBA(2, 132, 199, 0.12)
-	zenCustomDirectBorder = mygoui.RGBA(2, 132, 199, 0.28)
+		Accent:          mygoui.Hex("#0A84FF"),
+		AccentSolid:     mygoui.Hex("#0A84FF"),
+		AccentHover:     mygoui.Hex("#0070E0"),
+		AccentPressed:   mygoui.Hex("#005BBF"),
+		AccentSoft:      mygoui.RGBA(10, 132, 255, 0.11),
+		AccentSoftHover: mygoui.RGBA(10, 132, 255, 0.17),
+		AccentSoftPress: mygoui.RGBA(10, 132, 255, 0.22),
+		AccentBorder:    mygoui.RGBA(10, 132, 255, 0.28),
 
-	zenLANDirect     = mygoui.Hex("#0D9488")
-	zenLANDirectSoft = mygoui.RGBA(13, 148, 136, 0.12)
+		CustomDirect:       mygoui.Hex("#0284C7"),
+		CustomDirectSoft:   mygoui.RGBA(2, 132, 199, 0.12),
+		CustomDirectBorder: mygoui.RGBA(2, 132, 199, 0.28),
 
-	zenDirect     = mygoui.Hex("#10B981")
-	zenDirectText = mygoui.Hex("#059669")
-	zenDirectSoft = mygoui.RGBA(16, 185, 129, 0.12)
+		LANDirect:     mygoui.Hex("#0D9488"),
+		LANDirectSoft: mygoui.RGBA(13, 148, 136, 0.12),
 
-	zenDERP     = mygoui.Hex("#F59E0B")
-	zenDERPText = mygoui.Hex("#D97706")
-	zenDERPSoft = mygoui.RGBA(245, 158, 11, 0.14)
+		Direct:     mygoui.Hex("#10B981"),
+		DirectText: mygoui.Hex("#059669"),
+		DirectSoft: mygoui.RGBA(16, 185, 129, 0.12),
 
-	zenOffline    = mygoui.Hex("#94A3B8")
-	zenDanger     = mygoui.Hex("#EF4444")
-	zenDangerDark = mygoui.Hex("#DC2626")
-	zenDangerSoft = mygoui.RGBA(239, 68, 68, 0.10)
+		DERP:     mygoui.Hex("#F59E0B"),
+		DERPText: mygoui.Hex("#D97706"),
+		DERPSoft: mygoui.RGBA(245, 158, 11, 0.14),
 
-	zenAccordionBg   = mygoui.Hex("#F8FBFF")
-	zenProgressTrack = mygoui.Hex("#E2E8F0")
-	zenTimeChipBg    = mygoui.RGBA(15, 23, 42, 0.05)
-	zenDropHintBg    = mygoui.RGBA(255, 255, 255, 0.60)
+		Offline:          mygoui.Hex("#94A3B8"),
+		Danger:           mygoui.Hex("#EF4444"),
+		DangerDark:       mygoui.Hex("#DC2626"),
+		DangerSolid:      mygoui.Hex("#EF4444"),
+		DangerSolidHover: mygoui.Hex("#DC2626"),
+		DangerSolidPress: mygoui.Hex("#B91C1C"),
+		DangerSoft:       mygoui.RGBA(239, 68, 68, 0.10),
+		DangerSoftHover:  mygoui.RGBA(239, 68, 68, 0.16),
+		DangerSoftPress:  mygoui.RGBA(239, 68, 68, 0.22),
+		DangerBorder:     mygoui.RGBA(239, 68, 68, 0.22),
+
+		AccordionBg:   mygoui.Hex("#F8FBFF"),
+		ProgressTrack: mygoui.Hex("#E2E8F0"),
+		TimeChipBg:    mygoui.RGBA(15, 23, 42, 0.05),
+		WinBtnHover:   mygoui.RGBA(15, 23, 42, 0.09),
+		WinBtnPressed: mygoui.RGBA(15, 23, 42, 0.14),
+		DropHintBg:    mygoui.RGBA(255, 255, 255, 0.60),
+
+		Backdrop:       mygoui.RGBA(15, 23, 42, 0.34),
+		BackdropStrong: mygoui.RGBA(15, 23, 42, 0.48),
+		ShadowSoft:     mygoui.RGBA(15, 23, 42, 0.06),
+		ShadowCard:     mygoui.RGBA(15, 23, 42, 0.09),
+		ShadowPopover:  mygoui.RGBA(15, 23, 42, 0.16),
+		ShadowModal:    mygoui.RGBA(15, 23, 42, 0.22),
+
+		ToastBg:     mygoui.Hex("#0F172A"),
+		ToastBorder: mygoui.RGBA(15, 23, 42, 0),
+		QRCardBg:    mygoui.Hex("#FFFFFF"),
+		Scrollbar:   mygoui.RGBA(15, 23, 42, 0.20),
+	}
+
+	zenDarkPalette = &zenPalette{
+		Dark: true,
+
+		Bg:            mygoui.Hex("#0B1120"),
+		Surface:       mygoui.Hex("#111A2E"),
+		SurfaceSubtle: mygoui.Hex("#172238"),
+		SurfaceHover:  mygoui.Hex("#1E2C47"),
+		InputFill:     mygoui.Hex("#0E172A"),
+		ControlActive: mygoui.Hex("#253656"),
+
+		Border:       mygoui.RGBA(148, 163, 184, 0.14),
+		BorderStrong: mygoui.RGBA(148, 163, 184, 0.24),
+
+		Ink:          mygoui.Hex("#F1F5F9"),
+		InkSecondary: mygoui.Hex("#94A3B8"),
+		InkMuted:     mygoui.Hex("#64748B"),
+
+		SelfBubbleBg:  mygoui.Hex("#0A84FF"),
+		SelfBubbleInk: mygoui.Hex("#FFFFFF"),
+
+		Accent:          mygoui.Hex("#3B9EFF"),
+		AccentSolid:     mygoui.Hex("#0A84FF"),
+		AccentHover:     mygoui.Hex("#258EFF"),
+		AccentPressed:   mygoui.Hex("#0066CC"),
+		AccentSoft:      mygoui.RGBA(59, 158, 255, 0.16),
+		AccentSoftHover: mygoui.RGBA(59, 158, 255, 0.24),
+		AccentSoftPress: mygoui.RGBA(59, 158, 255, 0.30),
+		AccentBorder:    mygoui.RGBA(59, 158, 255, 0.36),
+
+		CustomDirect:       mygoui.Hex("#38BDF8"),
+		CustomDirectSoft:   mygoui.RGBA(56, 189, 248, 0.16),
+		CustomDirectBorder: mygoui.RGBA(56, 189, 248, 0.34),
+
+		LANDirect:     mygoui.Hex("#2DD4BF"),
+		LANDirectSoft: mygoui.RGBA(45, 212, 191, 0.16),
+
+		Direct:     mygoui.Hex("#34D399"),
+		DirectText: mygoui.Hex("#34D399"),
+		DirectSoft: mygoui.RGBA(52, 211, 153, 0.16),
+
+		DERP:     mygoui.Hex("#FBBF24"),
+		DERPText: mygoui.Hex("#FBBF24"),
+		DERPSoft: mygoui.RGBA(251, 191, 36, 0.16),
+
+		Offline:          mygoui.Hex("#64748B"),
+		Danger:           mygoui.Hex("#F87171"),
+		DangerDark:       mygoui.Hex("#FCA5A5"),
+		DangerSolid:      mygoui.Hex("#DC2626"),
+		DangerSolidHover: mygoui.Hex("#B91C1C"),
+		DangerSolidPress: mygoui.Hex("#991B1B"),
+		DangerSoft:       mygoui.RGBA(239, 68, 68, 0.16),
+		DangerSoftHover:  mygoui.RGBA(239, 68, 68, 0.24),
+		DangerSoftPress:  mygoui.RGBA(239, 68, 68, 0.30),
+		DangerBorder:     mygoui.RGBA(248, 113, 113, 0.30),
+
+		AccordionBg:   mygoui.Hex("#0E1A30"),
+		ProgressTrack: mygoui.Hex("#24324B"),
+		TimeChipBg:    mygoui.RGBA(148, 163, 184, 0.12),
+		WinBtnHover:   mygoui.RGBA(148, 163, 184, 0.20),
+		WinBtnPressed: mygoui.RGBA(148, 163, 184, 0.28),
+		DropHintBg:    mygoui.RGBA(17, 26, 46, 0.84),
+
+		Backdrop:       mygoui.RGBA(2, 6, 23, 0.64),
+		BackdropStrong: mygoui.RGBA(2, 6, 23, 0.76),
+		ShadowSoft:     mygoui.RGBA(2, 6, 23, 0.34),
+		ShadowCard:     mygoui.RGBA(2, 6, 23, 0.42),
+		ShadowPopover:  mygoui.RGBA(2, 6, 23, 0.56),
+		ShadowModal:    mygoui.RGBA(2, 6, 23, 0.68),
+
+		ToastBg:     mygoui.Hex("#1E293B"),
+		ToastBorder: mygoui.RGBA(148, 163, 184, 0.22),
+		QRCardBg:    mygoui.Hex("#FFFFFF"),
+		Scrollbar:   mygoui.RGBA(148, 163, 184, 0.30),
+	}
+
+	cachedZenLightTheme = buildZenTheme(false)
+	cachedZenDarkTheme  = buildZenTheme(true)
 )
 
-var cachedZenTheme = buildZenTheme()
+// ResolveDarkMode resolves a theme preference ("auto", "light", "dark") against the OS dark mode state.
+func ResolveDarkMode(pref string, systemDark bool) bool {
+	switch model.NormalizeTheme(pref) {
+	case model.ThemeDark:
+		return true
+	case model.ThemeLight:
+		return false
+	default:
+		return systemDark
+	}
+}
 
-func buildZenTheme() *mygoui.Theme {
-	t := *mygoui.LightTheme()
-	t.Dark = false
-	t.Background = zenBg
-	t.Surface = zenSurface
-	t.SurfaceHover = zenSurfaceSubtle
-	t.SurfacePressed = zenInputFill
-	t.Border = zenBorderStrong
-	t.Text = zenInk
-	t.TextMuted = zenInkMuted
-	t.Accent = zenAccent
-	t.AccentHover = zenAccentHover
-	t.AccentPressed = zenAccentPressed
-	t.AccentText = zenSelfBubbleInk
-	t.InactiveAccent = zenAccent
-	t.Danger = zenDanger
-	t.Warning = zenDERP
-	t.Success = zenDirect
-	t.Selection = zenAccent.Alpha(0.22)
-	t.Focus = zenAccent.Alpha(0.45)
-	t.Inverse = zenInk
-	t.InverseText = zenSelfBubbleInk
-	t.Scrollbar = mygoui.RGBA(15, 23, 42, 0.20)
+// WindowBgHex returns the native window backdrop hex color matching the active light or dark palette.
+func WindowBgHex(dark bool) string {
+	if dark {
+		return "#0B1120"
+	}
+	return "#F3F5F9"
+}
+
+func buildZenTheme(dark bool) *mygoui.Theme {
+	var t mygoui.Theme
+	p := zenLightPalette
+	if dark {
+		t = *mygoui.DarkTheme()
+		p = zenDarkPalette
+		t.Surface = p.InputFill
+		t.SurfaceHover = p.SurfaceHover
+		t.SurfacePressed = p.ControlActive
+		t.Inverse = mygoui.Hex("#F1F5F9")
+		t.InverseText = mygoui.Hex("#0F172A")
+	} else {
+		t = *mygoui.LightTheme()
+		t.Surface = p.Surface
+		t.SurfaceHover = p.SurfaceSubtle
+		t.SurfacePressed = p.InputFill
+		t.Inverse = p.Ink
+		t.InverseText = p.SelfBubbleInk
+	}
+	t.Dark = dark
+	t.Background = p.Bg
+	t.Border = p.BorderStrong
+	t.Text = p.Ink
+	t.TextMuted = p.InkMuted
+	t.Accent = p.AccentSolid
+	t.AccentHover = p.AccentHover
+	t.AccentPressed = p.AccentPressed
+	t.AccentText = p.SelfBubbleInk
+	t.InactiveAccent = p.Accent
+	t.Danger = p.Danger
+	t.Warning = p.DERP
+	t.Success = p.Direct
+	t.Selection = p.Accent.Alpha(0.26)
+	t.Focus = p.Accent.Alpha(0.50)
+	t.Scrollbar = p.Scrollbar
 	t.ScrollbarWidth = 5
 	t.Radius = 10
 	t.Spacing = 4
@@ -89,9 +303,20 @@ func buildZenTheme() *mygoui.Theme {
 	return &t
 }
 
-// zenTheme returns the Scheme C · Zen Popover theme for mygo/ui.
-func zenTheme() *mygoui.Theme {
-	return cachedZenTheme
+// zenTheme returns the Scheme C · Zen Popover theme for mygo/ui in light or dark appearance.
+func zenTheme(dark bool) *mygoui.Theme {
+	if dark {
+		return cachedZenDarkTheme
+	}
+	return cachedZenLightTheme
+}
+
+// zenPal returns the active immutable palette bound to the current UI frame's theme.
+func zenPal(c *mygoui.Context) *zenPalette {
+	if c != nil && c.Theme().Dark {
+		return zenDarkPalette
+	}
+	return zenLightPalette
 }
 
 // Crisp 24x24 Lucide-style inline SVG icons parsed once at package initialization.
@@ -208,26 +433,27 @@ var zenIcons = map[string]*mygoui.SVG{
 
 // zenCircleBtn renders a 32x32 circular icon button with Zen Popover styling.
 func zenCircleBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label string, active bool) mygoui.Element {
+	p := zenPal(c)
 	btn := mygoui.ButtonBase(c.Key(key))
 
-	bg := zenSurface
-	border := zenBorder
-	fg := zenInkSecondary
+	bg := p.Surface
+	border := p.Border
+	fg := p.InkSecondary
 
 	if active {
-		bg = zenAccentSoft
-		border = zenAccentBorder
-		fg = zenAccent
+		bg = p.AccentSoft
+		border = p.AccentBorder
+		fg = p.Accent
 		if btn.Hovered() {
-			bg = mygoui.RGBA(10, 132, 255, 0.16)
+			bg = p.AccentSoftHover
 		}
 	} else {
 		if btn.Pressed() {
-			bg = zenInputFill
-			fg = zenInk
+			bg = p.InputFill
+			fg = p.Ink
 		} else if btn.Hovered() {
-			bg = zenSurfaceSubtle
-			fg = zenInk
+			bg = p.SurfaceSubtle
+			fg = p.Ink
 		}
 	}
 
@@ -248,25 +474,26 @@ func zenCircleBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label string, 
 
 // zenWindowControlBtn renders a GNOME-style circular headerbar window control button (minimize/maximize/close).
 func zenWindowControlBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label string, isClose bool) mygoui.Element {
+	p := zenPal(c)
 	btn := mygoui.ButtonBase(c.Key(key))
 
-	bg := zenTimeChipBg
-	fg := zenInkSecondary
+	bg := p.TimeChipBg
+	fg := p.InkSecondary
 	if isClose {
 		if btn.Pressed() {
-			bg = mygoui.RGBA(239, 68, 68, 0.20)
-			fg = zenDangerDark
+			bg = p.DangerSoftPress
+			fg = p.DangerDark
 		} else if btn.Hovered() {
-			bg = zenDangerSoft
-			fg = zenDangerDark
+			bg = p.DangerSoft
+			fg = p.DangerDark
 		}
 	} else {
 		if btn.Pressed() {
-			bg = mygoui.RGBA(15, 23, 42, 0.14)
-			fg = zenInk
+			bg = p.WinBtnPressed
+			fg = p.Ink
 		} else if btn.Hovered() {
-			bg = mygoui.RGBA(15, 23, 42, 0.09)
-			fg = zenInk
+			bg = p.WinBtnHover
+			fg = p.Ink
 		}
 	}
 
@@ -286,27 +513,28 @@ func zenWindowControlBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label s
 
 // zenCapsuleIconBtn renders a borderless circular icon button inside the Floating Capsule composer.
 func zenCapsuleIconBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label string, size, iconSize float32, muted, active bool) mygoui.Element {
+	p := zenPal(c)
 	btn := mygoui.ButtonBase(c.Key(key))
 
 	bg := mygoui.RGBA(0, 0, 0, 0)
-	fg := zenInkSecondary
+	fg := p.InkSecondary
 	if muted {
-		fg = zenInkMuted
+		fg = p.InkMuted
 	}
 
 	if active {
-		bg = zenAccentSoft
-		fg = zenAccent
+		bg = p.AccentSoft
+		fg = p.Accent
 		if btn.Hovered() {
-			bg = mygoui.RGBA(10, 132, 255, 0.17)
+			bg = p.AccentSoftHover
 		}
 	} else {
 		if btn.Pressed() {
-			bg = zenProgressTrack
-			fg = zenInk
+			bg = p.ProgressTrack
+			fg = p.Ink
 		} else if btn.Hovered() {
-			bg = zenInputFill
-			fg = zenInk
+			bg = p.SurfaceHover
+			fg = p.Ink
 		}
 	}
 
@@ -327,30 +555,31 @@ func zenCapsuleIconBtn(c *mygoui.Context, key string, svg *mygoui.SVG, label str
 
 // zenPairHeaderBtn renders the dedicated top-right Pair CTA pill button.
 func zenPairHeaderBtn(c *mygoui.Context, label, tooltip string, active bool) mygoui.Element {
+	p := zenPal(c)
 	btn := mygoui.ButtonBase(c.Key("btn-pair"))
 
-	bg := zenAccentSoft
-	border := zenAccent.Alpha(0.24)
-	fg := zenAccent
+	bg := p.AccentSoft
+	border := p.AccentBorder
+	fg := p.Accent
 
 	if active {
-		bg = zenAccent
-		border = zenAccent
-		fg = zenSelfBubbleInk
+		bg = p.AccentSolid
+		border = p.AccentSolid
+		fg = p.SelfBubbleInk
 		if btn.Pressed() {
-			bg = zenAccentPressed
-			border = zenAccentPressed
+			bg = p.AccentPressed
+			border = p.AccentPressed
 		} else if btn.Hovered() {
-			bg = zenAccentHover
-			border = zenAccentHover
+			bg = p.AccentHover
+			border = p.AccentHover
 		}
 	} else {
 		if btn.Pressed() {
-			bg = mygoui.RGBA(10, 132, 255, 0.22)
-			border = zenAccent.Alpha(0.42)
+			bg = p.AccentSoftPress
+			border = p.Accent.Alpha(0.46)
 		} else if btn.Hovered() {
-			bg = mygoui.RGBA(10, 132, 255, 0.17)
-			border = zenAccent.Alpha(0.36)
+			bg = p.AccentSoftHover
+			border = p.Accent.Alpha(0.38)
 		}
 	}
 
@@ -374,30 +603,31 @@ func zenPairHeaderBtn(c *mygoui.Context, label, tooltip string, active bool) myg
 
 // zenPillBtn renders a rounded pill CTA button in primary blue or secondary surface style.
 func zenPillBtn(c *mygoui.Context, key, text string, primary, disabled bool) mygoui.Element {
+	p := zenPal(c)
 	btn := mygoui.ButtonBase(c.Key(key))
 
-	bg := zenSurfaceSubtle
-	border := zenBorder
-	fg := zenInk
+	bg := p.SurfaceSubtle
+	border := p.Border
+	fg := p.Ink
 
 	if primary {
-		bg = zenAccent
-		border = zenAccent
-		fg = zenSelfBubbleInk
+		bg = p.AccentSolid
+		border = p.AccentSolid
+		fg = p.SelfBubbleInk
 		if !disabled {
 			if btn.Pressed() {
-				bg = zenAccentPressed
-				border = zenAccentPressed
+				bg = p.AccentPressed
+				border = p.AccentPressed
 			} else if btn.Hovered() {
-				bg = zenAccentHover
-				border = zenAccentHover
+				bg = p.AccentHover
+				border = p.AccentHover
 			}
 		}
 	} else if !disabled {
 		if btn.Pressed() {
-			bg = zenProgressTrack
+			bg = p.ProgressTrack
 		} else if btn.Hovered() {
-			bg = zenSurfaceHover
+			bg = p.SurfaceHover
 		}
 	}
 
@@ -421,17 +651,18 @@ func zenPillBtn(c *mygoui.Context, key, text string, primary, disabled bool) myg
 
 // zenMicroBtn renders a low-contrast compact ghost trigger beneath chat bubbles.
 func zenMicroBtn(c *mygoui.Context, key string, svg *mygoui.SVG, text string, danger bool) mygoui.Element {
+	p := zenPal(c)
 	btn := mygoui.ButtonBase(c.Key(key))
 
 	bg := mygoui.RGBA(0, 0, 0, 0)
-	fg := zenInkMuted
+	fg := p.InkMuted
 	if btn.Hovered() {
 		if danger {
-			bg = zenDangerSoft
-			fg = zenDanger
+			bg = p.DangerSoft
+			fg = p.Danger
 		} else {
-			bg = zenTimeChipBg
-			fg = zenInkSecondary
+			bg = p.TimeChipBg
+			fg = p.InkSecondary
 		}
 	}
 
@@ -454,15 +685,16 @@ func zenMicroBtn(c *mygoui.Context, key string, svg *mygoui.SVG, text string, da
 
 // zenDangerPillBtn renders a compact red-tinted pill button for destructive actions like revoking a device.
 func zenDangerPillBtn(c *mygoui.Context, key, text string) mygoui.Element {
+	p := zenPal(c)
 	btn := mygoui.ButtonBase(c.Key(key))
 
-	bg := zenDangerSoft
-	border := mygoui.RGBA(239, 68, 68, 0.22)
-	fg := zenDanger
+	bg := p.DangerSoft
+	border := p.DangerBorder
+	fg := p.Danger
 	if btn.Pressed() {
-		bg = mygoui.RGBA(239, 68, 68, 0.20)
+		bg = p.DangerSoftPress
 	} else if btn.Hovered() {
-		bg = mygoui.RGBA(239, 68, 68, 0.16)
+		bg = p.DangerSoftHover
 	}
 
 	btn.Padding(4, 10).
@@ -482,13 +714,14 @@ func zenDangerPillBtn(c *mygoui.Context, key, text string) mygoui.Element {
 
 // zenDangerSolidPillBtn renders a solid red CTA pill button for destructive confirmations.
 func zenDangerSolidPillBtn(c *mygoui.Context, key, text string) mygoui.Element {
+	p := zenPal(c)
 	btn := mygoui.ButtonBase(c.Key(key))
 
-	bg := zenDanger
+	bg := p.DangerSolid
 	if btn.Pressed() {
-		bg = mygoui.Hex("#B91C1C")
+		bg = p.DangerSolidPress
 	} else if btn.Hovered() {
-		bg = zenDangerDark
+		bg = p.DangerSolidHover
 	}
 
 	btn.Padding(6, 14).
@@ -501,37 +734,38 @@ func zenDangerSolidPillBtn(c *mygoui.Context, key, text string) mygoui.Element {
 		Cursor(mygoui.CursorPointer).
 		Label(text).
 		Children(func() {
-			mygoui.Text(c, text).FontSize(12).FontWeight(600).TextColor(zenSelfBubbleInk).NoWrap()
+			mygoui.Text(c, text).FontSize(12).FontWeight(600).TextColor(p.SelfBubbleInk).NoWrap()
 		})
 	return btn
 }
 
 // zenIconPillBtn renders a secondary/primary pill button with a leading Lucide SVG icon.
 func zenIconPillBtn(c *mygoui.Context, key string, svg *mygoui.SVG, text string, primary, disabled bool) mygoui.Element {
+	p := zenPal(c)
 	btn := mygoui.ButtonBase(c.Key(key))
 
-	bg := zenSurfaceSubtle
-	border := zenBorder
-	fg := zenInk
+	bg := p.SurfaceSubtle
+	border := p.Border
+	fg := p.Ink
 
 	if primary {
-		bg = zenAccent
-		border = zenAccent
-		fg = zenSelfBubbleInk
+		bg = p.AccentSolid
+		border = p.AccentSolid
+		fg = p.SelfBubbleInk
 		if !disabled {
 			if btn.Pressed() {
-				bg = zenAccentPressed
-				border = zenAccentPressed
+				bg = p.AccentPressed
+				border = p.AccentPressed
 			} else if btn.Hovered() {
-				bg = zenAccentHover
-				border = zenAccentHover
+				bg = p.AccentHover
+				border = p.AccentHover
 			}
 		}
 	} else if !disabled {
 		if btn.Pressed() {
-			bg = zenProgressTrack
+			bg = p.ProgressTrack
 		} else if btn.Hovered() {
-			bg = zenSurfaceHover
+			bg = p.SurfaceHover
 		}
 	}
 
@@ -557,14 +791,29 @@ func zenIconPillBtn(c *mygoui.Context, key string, svg *mygoui.SVG, text string,
 	return btn
 }
 
-// zenFileTileColors returns the uppercase extension label and pastel tile colors for a file name.
-func zenFileTileColors(fileName string) (ext string, bg, fg mygoui.Color) {
+// zenFileTileColors returns the uppercase extension label and pastel/tinted tile colors for a file name.
+func zenFileTileColors(fileName string, dark bool) (ext string, bg, fg mygoui.Color) {
 	raw := strings.ToUpper(strings.TrimPrefix(filepath.Ext(fileName), "."))
 	ext = raw
 	if ext == "" {
 		ext = "FILE"
 	} else if len(ext) > 4 {
 		ext = ext[:4]
+	}
+
+	if dark {
+		switch raw {
+		case "PDF", "DOC", "DOCX", "MD", "TXT", "RTF":
+			return ext, mygoui.RGBA(244, 63, 94, 0.20), mygoui.Hex("#FDA4AF")
+		case "ZIP", "TAR", "GZ", "TGZ", "7Z", "DMG", "RAR", "XZ":
+			return ext, mygoui.RGBA(14, 165, 233, 0.20), mygoui.Hex("#7DD3FC")
+		case "MOV", "MP4", "MKV", "MP3", "AVI", "WEBM", "WAV", "M4A":
+			return ext, mygoui.RGBA(99, 102, 241, 0.22), mygoui.Hex("#A5B4FC")
+		case "PNG", "JPG", "JPEG", "WEBP", "SVG", "GIF", "HEIC", "BMP":
+			return ext, mygoui.RGBA(16, 185, 129, 0.20), mygoui.Hex("#6EE7B7")
+		default:
+			return ext, mygoui.RGBA(148, 163, 184, 0.16), mygoui.Hex("#CBD5E1")
+		}
 	}
 
 	switch raw {

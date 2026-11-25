@@ -2323,4 +2323,256 @@ func TestCustomLinuxWindowControlButtons(t *testing.T) {
 	}
 }
 
+func TestThemePaletteResolutionAndTokens(t *testing.T) {
+	cases := []struct {
+		pref       string
+		systemDark bool
+		wantDark   bool
+	}{
+		{model.ThemeAuto, false, false},
+		{model.ThemeAuto, true, true},
+		{"", false, false},
+		{"", true, true},
+		{"unknown", true, true},
+		{model.ThemeLight, false, false},
+		{model.ThemeLight, true, false},
+		{model.ThemeDark, false, true},
+		{model.ThemeDark, true, true},
+	}
+	for _, tc := range cases {
+		if got := ResolveDarkMode(tc.pref, tc.systemDark); got != tc.wantDark {
+			t.Fatalf("ResolveDarkMode(%q, %v) = %v, want %v", tc.pref, tc.systemDark, got, tc.wantDark)
+		}
+	}
 
+	if got := WindowBgHex(false); got != "#F3F5F9" {
+		t.Fatalf("WindowBgHex(false) = %q, want #F3F5F9", got)
+	}
+	if got := WindowBgHex(true); got != "#0B1120" {
+		t.Fatalf("WindowBgHex(true) = %q, want #0B1120", got)
+	}
+
+	if nativeThemeSource(model.ThemeAuto) != mygo.ThemeSystem {
+		t.Fatalf("nativeThemeSource(auto) != ThemeSystem")
+	}
+	if nativeThemeSource(model.ThemeLight) != mygo.ThemeLight {
+		t.Fatalf("nativeThemeSource(light) != ThemeLight")
+	}
+	if nativeThemeSource(model.ThemeDark) != mygo.ThemeDark {
+		t.Fatalf("nativeThemeSource(dark) != ThemeDark")
+	}
+
+	lightTh := zenTheme(false)
+	darkTh := zenTheme(true)
+	if lightTh.Dark || !darkTh.Dark {
+		t.Fatalf("expected lightTh.Dark=false and darkTh.Dark=true, got light=%v dark=%v", lightTh.Dark, darkTh.Dark)
+	}
+	if lightTh.Background == darkTh.Background || lightTh.Text == darkTh.Text {
+		t.Fatalf("expected distinct light and dark theme colors")
+	}
+	// QR card backdrop must stay white in dark mode so phone cameras scan reliably.
+	if zenDarkPalette.QRCardBg != mygoui.Hex("#FFFFFF") {
+		t.Fatalf("zenDarkPalette.QRCardBg = %+v, want white #FFFFFF", zenDarkPalette.QRCardBg)
+	}
+
+	extL, bgL, fgL := zenFileTileColors("design.pdf", false)
+	extD, bgD, fgD := zenFileTileColors("design.pdf", true)
+	if extL != "PDF" || extD != "PDF" {
+		t.Fatalf("expected PDF extension label, got light=%q dark=%q", extL, extD)
+	}
+	if bgL == bgD || fgL == fgD {
+		t.Fatalf("expected distinct light and dark file tile colors for PDF")
+	}
+}
+
+func TestSettingsThemeLivePreviewRevertPersistAndSystemAuto(t *testing.T) {
+	api := newMockAppAPI()
+	api.config.Language = model.LanguageChinese
+	api.config.Theme = model.ThemeAuto
+
+	state := NewState(api)
+	state.Start(context.Background())
+	t.Cleanup(state.Stop)
+
+	app := NewApp(state)
+	app.runAsync = func(fn func()) { fn() }
+
+	type themeEvent struct {
+		pref string
+		dark bool
+	}
+	var events []themeEvent
+	app.SetOnAppearanceChanged(func(pref string, dark bool) {
+		events = append(events, themeEvent{pref: pref, dark: dark})
+	})
+
+	tt := mygoui.NewTester(app.View, 540, 760)
+	tt.Frame()
+
+	if len(events) != 1 || events[0] != (themeEvent{pref: model.ThemeAuto, dark: false}) {
+		t.Fatalf("initial appearance event = %+v, want [{auto false}]", events)
+	}
+
+	// Open Settings -> General: verify Appearance segmented control is rendered.
+	if err := tt.Click("设置与 DERP"); err != nil {
+		t.Fatalf("open settings: %v", err)
+	}
+	tt.Frame()
+	if !tt.HasText("外观主题") || !tt.HasText("跟随系统") || !tt.HasText("浅色") || !tt.HasText("深色") {
+		t.Fatalf("expected Appearance segmented control in General tab; texts: %v", tt.Texts())
+	}
+
+	// 1. Live preview: clicking "深色" switches appearance immediately without saving yet.
+	if err := tt.Click("深色"); err != nil {
+		t.Fatalf("click 深色: %v", err)
+	}
+	tt.Frame()
+	if last := events[len(events)-1]; last != (themeEvent{pref: model.ThemeDark, dark: true}) {
+		t.Fatalf("after live preview click 深色, last event = %+v, want {dark true}", last)
+	}
+	if api.Config().Theme != model.ThemeAuto {
+		t.Fatalf("live preview must not persist before Save, got %q", api.Config().Theme)
+	}
+
+	// 2. Closing Settings without saving must revert appearance back to persisted ThemeAuto (light).
+	if err := tt.Click("关闭设置"); err != nil {
+		t.Fatalf("close settings without saving: %v", err)
+	}
+	tt.Frame()
+	if last := events[len(events)-1]; last != (themeEvent{pref: model.ThemeAuto, dark: false}) {
+		t.Fatalf("after closing without save, last event = %+v, want {auto false}", last)
+	}
+
+	// 3. Re-open Settings, pick "深色" and Save -> persists dark theme.
+	if err := tt.Click("设置与 DERP"); err != nil {
+		t.Fatalf("re-open settings: %v", err)
+	}
+	tt.Frame()
+	if err := tt.Click("深色"); err != nil {
+		t.Fatalf("click 深色 before save: %v", err)
+	}
+	tt.Frame()
+	if err := tt.Click("保存设置"); err != nil {
+		t.Fatalf("click 保存设置: %v", err)
+	}
+	tt.Frame()
+
+	if got := api.Config().Theme; got != model.ThemeDark {
+		t.Fatalf("persisted config Theme = %q, want %q", got, model.ThemeDark)
+	}
+	if last := events[len(events)-1]; last != (themeEvent{pref: model.ThemeDark, dark: true}) {
+		t.Fatalf("after saving dark theme, last event = %+v, want {dark true}", last)
+	}
+
+	// 4. While explicit Dark is saved, OS systemDark flip to false must NOT override dark mode.
+	app.SetSystemDark(false)
+	tt.Frame()
+	if last := events[len(events)-1]; !last.dark {
+		t.Fatalf("explicit dark mode was overridden by systemDark=false: %+v", last)
+	}
+
+	// 5. Switch back to System ("跟随系统") and save -> responds live to SetSystemDark(true/false).
+	if err := tt.Click("设置与 DERP"); err != nil {
+		t.Fatalf("open settings for auto: %v", err)
+	}
+	tt.Frame()
+	if err := tt.Click("跟随系统"); err != nil {
+		t.Fatalf("click 跟随系统: %v", err)
+	}
+	tt.Frame()
+	if err := tt.Click("保存设置"); err != nil {
+		t.Fatalf("save 跟随系统: %v", err)
+	}
+	tt.Frame()
+
+	app.SetSystemDark(true)
+	tt.Frame()
+	if last := events[len(events)-1]; last != (themeEvent{pref: model.ThemeAuto, dark: true}) {
+		t.Fatalf("under ThemeAuto, SetSystemDark(true) event = %+v, want {auto true}", last)
+	}
+	app.SetSystemDark(false)
+	tt.Frame()
+	if last := events[len(events)-1]; last != (themeEvent{pref: model.ThemeAuto, dark: false}) {
+		t.Fatalf("under ThemeAuto, SetSystemDark(false) event = %+v, want {auto false}", last)
+	}
+}
+
+func TestDarkModeFullViewRenderAndTabStability(t *testing.T) {
+	api := newMockAppAPI()
+	api.config.Language = model.LanguageEnglish
+	api.config.Theme = model.ThemeDark
+	api.localDirectAddrs = []string{"192.168.1.10:19840"}
+	api.devices[1].DirectAddrs = []string{"192.168.1.42:19840"}
+
+	state := NewState(api)
+	state.Start(context.Background())
+	t.Cleanup(state.Stop)
+	state.SetToast("Dark theme active", false)
+
+	app := NewApp(state)
+	app.runAsync = func(fn func()) { fn() }
+
+	tt := mygoui.NewTester(app.View, 540, 760)
+	tt.Frame()
+
+	// Verify Search drawer renders in dark mode.
+	app.searchOpen = true
+	app.searchInput = "hello"
+	tt.Frame()
+	app.searchOpen = false
+	app.searchInput = ""
+
+	// Verify Devices popover + Direct IP accordion renders in dark mode.
+	app.devicesPopoverOpen = true
+	app.expandedDeviceID = "dev-peer-002"
+	tt.Frame()
+	if !tt.HasText("Paired Devices") || !tt.HasText("Custom Direct IP") {
+		t.Fatalf("expected Devices popover and direct IP accordion in dark mode; texts: %v", tt.Texts())
+	}
+	app.devicesPopoverOpen = false
+	app.expandedDeviceID = ""
+
+	// Verify Pairing modal (QR tab & Join tab) renders in dark mode.
+	app.openPairingFlow(0)
+	tt.Frame()
+	if !tt.HasText("Pair Device") {
+		t.Fatalf("expected Pairing modal QR tab in dark mode; texts: %v", tt.Texts())
+	}
+	app.pairTab = 1
+	tt.Frame()
+	if !tt.HasText("Join Existing Group") {
+		t.Fatalf("expected Pairing modal Join tab in dark mode; texts: %v", tt.Texts())
+	}
+	app.pairOpen = false
+	tt.Frame()
+
+	// Verify Settings modal renders all 4 tabs in dark mode with stable tab bar Y position.
+	if err := tt.Click("Settings & DERP"); err != nil {
+		t.Fatalf("open settings in dark mode: %v", err)
+	}
+	tt.Frame()
+	baseRect, ok := tt.Find("General")
+	if !ok {
+		t.Fatalf("expected General tab in dark mode")
+	}
+	for _, tab := range []string{"Transfer", "Network", "About", "General"} {
+		if err := tt.Click(tab); err != nil {
+			t.Fatalf("click tab %q in dark mode: %v", tab, err)
+		}
+		tt.Frame()
+		r, ok := tt.Find("General")
+		if !ok || r.Y != baseRect.Y {
+			t.Fatalf("tab bar shifted in dark mode on tab %q: ok=%v got=%.1f want=%.1f", tab, ok, r.Y, baseRect.Y)
+		}
+	}
+
+	// Verify Clear Confirm modal renders over dark Settings modal.
+	app.clearConfirmOpen = true
+	tt.Frame()
+	if !tt.HasText("Clear all chat history?") {
+		t.Fatalf("expected Clear Confirm modal in dark mode; texts: %v", tt.Texts())
+	}
+	app.clearConfirmOpen = false
+	app.settingsOpen = false
+	tt.Frame()
+}

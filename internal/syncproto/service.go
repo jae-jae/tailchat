@@ -361,6 +361,11 @@ func (s *Service) UpdateConfig(ctx context.Context, cfg model.AppConfig) error {
 	} else {
 		cfg.Language = model.NormalizeLanguage(cfg.Language)
 	}
+	if cfg.Theme == "" {
+		cfg.Theme = model.NormalizeTheme(oldCfg.Theme)
+	} else {
+		cfg.Theme = model.NormalizeTheme(cfg.Theme)
+	}
 
 	if cfg.DirectListenPort < 0 || cfg.DirectListenPort > 65535 {
 		return fmt.Errorf("invalid direct listen port %d", cfg.DirectListenPort)
@@ -1358,6 +1363,10 @@ func (s *Service) loadOrCreateConfig(id model.LocalIdentity) (model.AppConfig, e
 			cfg.Language = normLang
 			changed = true
 		}
+		if normTheme := model.NormalizeTheme(cfg.Theme); cfg.Theme != normTheme {
+			cfg.Theme = normTheme
+			changed = true
+		}
 		if !cfg.DirectListenDisabled && cfg.DirectListenPort == 0 {
 			cfg.DirectListenPort = model.DefaultDirectPort
 			changed = true
@@ -1377,6 +1386,7 @@ func (s *Service) loadOrCreateConfig(id model.LocalIdentity) (model.AppConfig, e
 	cfg := model.AppConfig{
 		DeviceName:           id.DeviceName,
 		Language:             model.LanguageAuto,
+		Theme:                model.ThemeAuto,
 		DERP:                 model.DefaultDERPConfig(),
 		DirectListenPort:     model.DefaultDirectPort,
 		AutoDownloadMaxBytes: autoDownload,

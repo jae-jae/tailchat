@@ -72,7 +72,7 @@ type State struct {
 func NewState(api model.AppAPI) *State {
 	s := &State{
 		api:       api,
-		config:    model.AppConfig{Language: model.LanguageAuto, MinimizeToTray: true},
+		config:    model.AppConfig{Language: model.LanguageAuto, Theme: model.ThemeAuto, MinimizeToTray: true},
 		peers:     make(map[string]model.PeerConnStatus),
 		transfers: make(map[string]model.TransferTask),
 	}

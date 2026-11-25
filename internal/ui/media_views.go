@@ -10,6 +10,7 @@ import (
 )
 
 func (a *App) renderUpdateBanner(c *mygoui.Context, snap ViewSnapshot) {
+	p := zenPal(c)
 	t := tr(snap.Locale)
 	up := snap.Update
 	if !up.BannerVisible() {
@@ -20,12 +21,12 @@ func (a *App) renderUpdateBanner(c *mygoui.Context, snap ViewSnapshot) {
 		Padding(7, 14).
 		Gap(8).
 		AlignItems(mygoui.Center).
-		Background(zenAccentSoft).
+		Background(p.AccentSoft).
 		BorderWidth(0, 0, 1, 0).
-		BorderColor(zenAccentBorder).
+		BorderColor(p.AccentBorder).
 		FillWidth().
 		Children(func() {
-			mygoui.Icon(c, iconSparkles).Size(14, 14).TextColor(zenAccent)
+			mygoui.Icon(c, iconSparkles).Size(14, 14).TextColor(p.Accent)
 
 			msgText := fmt.Sprintf(t.UpdateBannerF, up.LatestVersion)
 			if up.Installing {
@@ -38,7 +39,7 @@ func (a *App) renderUpdateBanner(c *mygoui.Context, snap ViewSnapshot) {
 			mygoui.Text(c, msgText).
 				FontSize(12).
 				FontWeight(600).
-				TextColor(zenAccent).
+				TextColor(p.Accent).
 				Grow(1).
 				MinWidth(0).
 				SingleLine()
@@ -61,7 +62,7 @@ func (a *App) renderUpdateBanner(c *mygoui.Context, snap ViewSnapshot) {
 					Label(t.DismissUpdate).
 					Tooltip(t.DismissUpdate).
 					Children(func() {
-						mygoui.Icon(c, iconX).Size(12, 12).TextColor(zenAccent)
+						mygoui.Icon(c, iconX).Size(12, 12).TextColor(p.Accent)
 					})
 				if dismissBtn.Clicked() {
 					a.state.DismissUpdate()
@@ -71,6 +72,7 @@ func (a *App) renderUpdateBanner(c *mygoui.Context, snap ViewSnapshot) {
 }
 
 func (a *App) renderImageBubble(c *mygoui.Context, snap ViewSnapshot, msg model.Message, isLocal, showProgress bool, task model.TransferTask, isAnimated bool) {
+	p := zenPal(c)
 	t := tr(snap.Locale)
 	fb := msg.File
 
@@ -131,16 +133,16 @@ func (a *App) renderImageBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 	mygoui.Column(c).
 		Width(cardW).
 		Radius(16).
-		Background(zenSurface).
-		Border(1, zenBorder).
-		Shadow(0, 3, 12, 0, mygoui.RGBA(15, 23, 42, 0.07)).
+		Background(p.Surface).
+		Border(1, p.Border).
+		Shadow(0, 3, 12, 0, p.ShadowSoft).
 		Clip().
 		Children(func() {
 			// Clickable media canvas (opens Lightbox modal).
 			previewBtn := mygoui.ButtonBase(c.Key("img-preview-" + msg.MsgID)).
 				FillWidth().
 				Height(boxH).
-				Background(zenSurfaceSubtle).
+				Background(p.SurfaceSubtle).
 				Justify(mygoui.Center).
 				AlignItems(mygoui.Center).
 				Cursor(mygoui.CursorPointer).
@@ -151,8 +153,8 @@ func (a *App) renderImageBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 					switch {
 					case loading:
 						mygoui.Column(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
-							mygoui.Icon(c, iconImage).Size(24, 24).TextColor(zenInkMuted)
-							mygoui.Text(c, t.LoadingPreview).FontSize(11.5).TextColor(zenInkMuted)
+							mygoui.Icon(c, iconImage).Size(24, 24).TextColor(p.InkMuted)
+							mygoui.Text(c, t.LoadingPreview).FontSize(11.5).TextColor(p.InkMuted)
 						})
 					case player != nil:
 						mygoui.Video(c, player).Size(boxW, boxH).Fit(mygoui.Contain)
@@ -167,9 +169,9 @@ func (a *App) renderImageBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 							Left(8).
 							Padding(2, 7).
 							Radius(99).
-							Background(mygoui.RGBA(15, 23, 42, 0.68)).
+							Background(mygoui.RGBA(15, 23, 42, 0.72)).
 							Children(func() {
-								mygoui.Text(c, t.MediaBadgeGIF).FontSize(10).Bold().TextColor(zenSelfBubbleInk)
+								mygoui.Text(c, t.MediaBadgeGIF).FontSize(10).Bold().TextColor(p.SelfBubbleInk)
 							})
 					}
 				})
@@ -183,16 +185,16 @@ func (a *App) renderImageBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 				Gap(8).
 				AlignItems(mygoui.Center).
 				FillWidth().
-				Background(zenSurface).
+				Background(p.Surface).
 				BorderWidth(1, 0, 0, 0).
-				BorderColor(zenBorder).
+				BorderColor(p.Border).
 				Children(func() {
 					nameBtn := mygoui.ButtonBase(c.Key("open-img-direct-" + msg.MsgID))
 					nameBg := mygoui.RGBA(0, 0, 0, 0)
 					if nameBtn.Pressed() {
-						nameBg = zenInputFill
+						nameBg = p.ProgressTrack
 					} else if nameBtn.Hovered() {
-						nameBg = zenSurfaceSubtle
+						nameBg = p.SurfaceHover
 					}
 					nameBtn.Grow(1).
 						MinWidth(0).
@@ -209,12 +211,12 @@ func (a *App) renderImageBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 								mygoui.Text(c, fb.FileName).
 									FontSize(11.5).
 									FontWeight(600).
-									TextColor(zenInk).
+									TextColor(p.Ink).
 									FillWidth().
 									SingleLine()
 								mygoui.Text(c, FormatBytes(fb.FileSize)).
 									FontSize(10.5).
-									TextColor(zenInkMuted).
+									TextColor(p.InkMuted).
 									FillWidth().
 									SingleLine()
 							})
@@ -231,6 +233,7 @@ func (a *App) renderImageBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 }
 
 func (a *App) renderVideoBubble(c *mygoui.Context, snap ViewSnapshot, msg model.Message, isLocal, showProgress bool, task model.TransferTask) {
+	p := zenPal(c)
 	t := tr(snap.Locale)
 	fb := msg.File
 
@@ -255,9 +258,9 @@ func (a *App) renderVideoBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 	mygoui.Column(c).
 		Width(cardW).
 		Radius(16).
-		Background(zenSurface).
-		Border(1, zenBorder).
-		Shadow(0, 3, 12, 0, mygoui.RGBA(15, 23, 42, 0.08)).
+		Background(p.Surface).
+		Border(1, p.Border).
+		Shadow(0, 3, 12, 0, p.ShadowSoft).
 		Clip().
 		Children(func() {
 			playArea := mygoui.ButtonBase(c.Key("vid-play-" + msg.MsgID)).
@@ -297,8 +300,8 @@ func (a *App) renderVideoBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 						AlignItems(mygoui.Center).
 						Background(mygoui.RGBA(15, 23, 42, 0.72)).
 						Children(func() {
-							mygoui.Icon(c, iconVideo).Size(11, 11).TextColor(zenSelfBubbleInk)
-							mygoui.Text(c, t.MediaBadgeVideo).FontSize(10).Bold().TextColor(zenSelfBubbleInk)
+							mygoui.Icon(c, iconVideo).Size(11, 11).TextColor(p.SelfBubbleInk)
+							mygoui.Text(c, t.MediaBadgeVideo).FontSize(10).Bold().TextColor(p.SelfBubbleInk)
 						})
 
 					// Centered circular Play emblem.
@@ -310,7 +313,7 @@ func (a *App) renderVideoBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 						Justify(mygoui.Center).
 						AlignItems(mygoui.Center).
 						Children(func() {
-							mygoui.Icon(c, iconPlay).Size(20, 20).TextColor(zenSelfBubbleInk)
+							mygoui.Icon(c, iconPlay).Size(20, 20).TextColor(p.SelfBubbleInk)
 						})
 				})
 
@@ -324,16 +327,16 @@ func (a *App) renderVideoBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 				Gap(8).
 				AlignItems(mygoui.Center).
 				FillWidth().
-				Background(zenSurface).
+				Background(p.Surface).
 				BorderWidth(1, 0, 0, 0).
-				BorderColor(zenBorder).
+				BorderColor(p.Border).
 				Children(func() {
 					nameBtn := mygoui.ButtonBase(c.Key("open-vid-direct-" + msg.MsgID))
 					nameBg := mygoui.RGBA(0, 0, 0, 0)
 					if nameBtn.Pressed() {
-						nameBg = zenInputFill
+						nameBg = p.ProgressTrack
 					} else if nameBtn.Hovered() {
-						nameBg = zenSurfaceSubtle
+						nameBg = p.SurfaceHover
 					}
 					nameBtn.Grow(1).
 						MinWidth(0).
@@ -350,12 +353,12 @@ func (a *App) renderVideoBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 								mygoui.Text(c, fb.FileName).
 									FontSize(12).
 									FontWeight(600).
-									TextColor(zenInk).
+									TextColor(p.Ink).
 									FillWidth().
 									SingleLine()
 								mygoui.Text(c, FormatBytes(fb.FileSize)).
 									FontSize(10.5).
-									TextColor(zenInkMuted).
+									TextColor(p.InkMuted).
 									FillWidth().
 									SingleLine()
 							})
@@ -372,6 +375,7 @@ func (a *App) renderVideoBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 }
 
 func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.Message, isLocal, showProgress bool, task model.TransferTask) {
+	p := zenPal(c)
 	t := tr(snap.Locale)
 	fb := msg.File
 
@@ -404,9 +408,9 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 		Padding(11, 13).
 		Gap(9).
 		Radius(16).
-		Background(zenSurface).
-		Border(1, zenBorder).
-		Shadow(0, 3, 12, 0, mygoui.RGBA(15, 23, 42, 0.06)).
+		Background(p.Surface).
+		Border(1, p.Border).
+		Shadow(0, 3, 12, 0, p.ShadowSoft).
 		Clip().
 		Children(func() {
 			mygoui.Row(c).Gap(10).AlignItems(mygoui.Center).FillWidth().Children(func() {
@@ -417,11 +421,11 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 					playIcon = iconPause
 				}
 				playBtn := mygoui.ButtonBase(c.Key("aud-toggle-" + msg.MsgID))
-				btnBg := zenAccent
+				btnBg := p.AccentSolid
 				if playBtn.Pressed() {
-					btnBg = zenAccentPressed
+					btnBg = p.AccentPressed
 				} else if playBtn.Hovered() {
-					btnBg = zenAccentHover
+					btnBg = p.AccentHover
 				}
 				playBtn.Size(38, 38).
 					Radius(99).
@@ -433,7 +437,7 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 					Label(playLabel).
 					Tooltip(playLabel).
 					Children(func() {
-						mygoui.Icon(c, playIcon).Size(16, 16).TextColor(zenSelfBubbleInk)
+						mygoui.Icon(c, playIcon).Size(16, 16).TextColor(p.SelfBubbleInk)
 					})
 				if playBtn.Clicked() {
 					msgID := msg.MsgID
@@ -449,9 +453,9 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 					titleBtn := mygoui.ButtonBase(c.Key("open-aud-direct-" + msg.MsgID))
 					titleBg := mygoui.RGBA(0, 0, 0, 0)
 					if titleBtn.Pressed() {
-						titleBg = zenInputFill
+						titleBg = p.ProgressTrack
 					} else if titleBtn.Hovered() {
-						titleBg = zenSurfaceSubtle
+						titleBg = p.SurfaceHover
 					}
 					titleBtn.Padding(1, 3).
 						Radius(5).
@@ -467,7 +471,7 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 							mygoui.Text(c, fb.FileName).
 								FontSize(12.5).
 								FontWeight(600).
-								TextColor(zenInk).
+								TextColor(p.Ink).
 								Grow(1).
 								MinWidth(0).
 								SingleLine()
@@ -481,19 +485,19 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 						Height(5).
 						FillWidth().
 						Radius(99).
-						Background(zenProgressTrack).
+						Background(p.ProgressTrack).
 						Clip().
 						Children(func() {
 							mygoui.Box(c).
 								Height(5).
 								WidthPercent(pct * 100).
 								Radius(99).
-								Background(zenAccent)
+								Background(p.Accent)
 						})
 
 					mygoui.Text(c, timeLabel).
 						FontSize(10.5).
-						TextColor(zenInkMuted).
+						TextColor(p.InkMuted).
 						FillWidth().
 						SingleLine()
 				})
@@ -506,6 +510,7 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 }
 
 func (a *App) renderRemoteMediaCard(c *mygoui.Context, snap ViewSnapshot, msg model.Message, showProgress bool, task model.TransferTask, mediaIcon *mygoui.SVG, downloadCTA string) {
+	p := zenPal(c)
 	t := tr(snap.Locale)
 	fb := msg.File
 	_, hasTask := snap.Transfers[fb.BlobHash]
@@ -527,25 +532,25 @@ func (a *App) renderRemoteMediaCard(c *mygoui.Context, snap ViewSnapshot, msg mo
 		Padding(12, 14).
 		Gap(10).
 		Radius(16).
-		Background(zenSurface).
-		Border(1, zenBorder).
-		Shadow(0, 3, 12, 0, mygoui.RGBA(15, 23, 42, 0.06)).
+		Background(p.Surface).
+		Border(1, p.Border).
+		Shadow(0, 3, 12, 0, p.ShadowSoft).
 		Clip().
 		Children(func() {
 			mygoui.Row(c).Gap(11).AlignItems(mygoui.Center).FillWidth().Children(func() {
 				mygoui.Row(c).
 					Size(44, 44).
 					Radius(12).
-					Background(zenAccentSoft).
+					Background(p.AccentSoft).
 					Justify(mygoui.Center).
 					AlignItems(mygoui.Center).
 					Shrink(0).
 					Children(func() {
-						mygoui.Icon(c, mediaIcon).Size(20, 20).TextColor(zenAccent)
+						mygoui.Icon(c, mediaIcon).Size(20, 20).TextColor(p.Accent)
 					})
 				mygoui.Column(c).Grow(1).MinWidth(0).Clip().Gap(2).Tooltip(fb.FileName).Children(func() {
-					mygoui.Text(c, fb.FileName).FontSize(13).FontWeight(600).TextColor(zenInk).FillWidth().SingleLine()
-					mygoui.Text(c, meta).FontSize(11.5).TextColor(zenInkSecondary).FillWidth().SingleLine()
+					mygoui.Text(c, fb.FileName).FontSize(13).FontWeight(600).TextColor(p.Ink).FillWidth().SingleLine()
+					mygoui.Text(c, meta).FontSize(11.5).TextColor(p.InkSecondary).FillWidth().SingleLine()
 				})
 			})
 
@@ -557,13 +562,13 @@ func (a *App) renderRemoteMediaCard(c *mygoui.Context, snap ViewSnapshot, msg mo
 				if pct > 1 {
 					pct = 1
 				}
-				barColor := zenAccent
+				barColor := p.Accent
 				if task.State == model.TransferPaused {
-					barColor = zenInkMuted
+					barColor = p.InkMuted
 				} else if task.State == model.TransferFailed {
-					barColor = zenDanger
+					barColor = p.Danger
 				}
-				mygoui.Row(c).Height(6).FillWidth().Radius(99).Background(zenProgressTrack).Clip().Children(func() {
+				mygoui.Row(c).Height(6).FillWidth().Radius(99).Background(p.ProgressTrack).Clip().Children(func() {
 					mygoui.Box(c).Height(6).WidthPercent(float32(pct * 100)).Radius(99).Background(barColor)
 				})
 			}
@@ -617,6 +622,7 @@ func (a *App) renderLightboxModal(c *mygoui.Context, snap ViewSnapshot) {
 	if !a.lightboxOpen {
 		return
 	}
+	p := zenPal(c)
 	t := tr(snap.Locale)
 	fb := a.lightboxFile
 	isAnim := ClassifyMedia(fb.FileName, fb.MimeType) == MediaAnimated
@@ -680,7 +686,7 @@ func (a *App) renderLightboxModal(c *mygoui.Context, snap ViewSnapshot) {
 						mygoui.Text(c, fb.FileName).
 							FontSize(13.5).
 							Bold().
-							TextColor(zenSelfBubbleInk).
+							TextColor(p.SelfBubbleInk).
 							FillWidth().
 							SingleLine()
 						sub := FormatBytes(fb.FileSize)
@@ -713,7 +719,7 @@ func (a *App) renderLightboxModal(c *mygoui.Context, snap ViewSnapshot) {
 						Label(t.ClosePreview).
 						Tooltip(t.ClosePreview).
 						Children(func() {
-							mygoui.Icon(c, iconX).Size(15, 15).TextColor(zenSelfBubbleInk)
+							mygoui.Icon(c, iconX).Size(15, 15).TextColor(p.SelfBubbleInk)
 						})
 					if closeBtn.Clicked() {
 						a.lightboxOpen = false
@@ -747,18 +753,19 @@ func (a *App) renderUpdateModal(c *mygoui.Context, snap ViewSnapshot) {
 	if !a.updateModalOpen {
 		return
 	}
+	p := zenPal(c)
 	t := tr(snap.Locale)
 	up := snap.Update
 
 	mygoui.DialogBase(c.Key("modal-update"), &a.updateModalOpen, func(backdrop, panel mygoui.Element) {
-		backdrop.Background(mygoui.RGBA(15, 23, 42, 0.34))
+		backdrop.Background(p.Backdrop)
 		panel.Width(430).
 			MaxWidthPercent(92).
 			Padding(20).
 			Radius(18).
-			Background(zenSurface).
-			Border(1, zenBorder).
-			Shadow(0, 20, 48, 0, mygoui.RGBA(15, 23, 42, 0.22))
+			Background(p.Surface).
+			Border(1, p.Border).
+			Shadow(0, 20, 48, 0, p.ShadowModal)
 
 		mygoui.Column(c).
 			Gap(14).
@@ -769,23 +776,23 @@ func (a *App) renderUpdateModal(c *mygoui.Context, snap ViewSnapshot) {
 					mygoui.Row(c).
 						Size(34, 34).
 						Radius(10).
-						Background(zenAccentSoft).
+						Background(p.AccentSoft).
 						Justify(mygoui.Center).
 						AlignItems(mygoui.Center).
 						Children(func() {
-							mygoui.Icon(c, iconSparkles).Size(17, 17).TextColor(zenAccent)
+							mygoui.Icon(c, iconSparkles).Size(17, 17).TextColor(p.Accent)
 						})
 					mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-						mygoui.Text(c, t.UpdateModalTitle).FontSize(15).Bold().TextColor(zenInk)
+						mygoui.Text(c, t.UpdateModalTitle).FontSize(15).Bold().TextColor(p.Ink)
 						if up.LatestVersion != "" {
 							mygoui.Text(c, fmt.Sprintf(t.UpdateVersionCompareF, up.CurrentVersion, up.LatestVersion)).
 								FontSize(12).
 								FontWeight(600).
-								TextColor(zenAccent)
+								TextColor(p.Accent)
 						} else {
 							mygoui.Text(c, fmt.Sprintf(t.CurrentVersionF, up.CurrentVersion)).
 								FontSize(12).
-								TextColor(zenInkSecondary)
+								TextColor(p.InkSecondary)
 						}
 					})
 					if zenCircleBtn(c, "update-modal-close", iconX, t.Close, false).Clicked() {
@@ -799,18 +806,18 @@ func (a *App) renderUpdateModal(c *mygoui.Context, snap ViewSnapshot) {
 					notes = t.NoReleaseNotes
 				}
 				mygoui.Column(c).Gap(6).FillWidth().Children(func() {
-					mygoui.Text(c, t.ReleaseNotesLabel).FontSize(12).FontWeight(600).TextColor(zenInk)
+					mygoui.Text(c, t.ReleaseNotesLabel).FontSize(12).FontWeight(600).TextColor(p.Ink)
 					mygoui.Scroll(c.Key("update-notes-scroll")).
 						Height(160).
 						FillWidth().
 						Radius(12).
-						Background(zenSurfaceSubtle).
-						Border(1, zenBorder).
+						Background(p.SurfaceSubtle).
+						Border(1, p.Border).
 						Padding(12).
 						Children(func() {
 							mygoui.Text(c, notes).
 								FontSize(12).
-								TextColor(zenInkSecondary).
+								TextColor(p.InkSecondary).
 								Wrap().
 								Selectable()
 						})
@@ -824,15 +831,15 @@ func (a *App) renderUpdateModal(c *mygoui.Context, snap ViewSnapshot) {
 						statusText = fmt.Sprintf(t.InstallingUpdatePctF, int(pct*100))
 					}
 					mygoui.Column(c).Gap(6).FillWidth().Children(func() {
-						mygoui.Text(c, statusText).FontSize(12).FontWeight(600).TextColor(zenAccent)
-						mygoui.Row(c).Height(6).FillWidth().Radius(99).Background(zenProgressTrack).Clip().Children(func() {
-							mygoui.Box(c).Height(6).WidthPercent(float32(pct * 100)).Radius(99).Background(zenAccent)
+						mygoui.Text(c, statusText).FontSize(12).FontWeight(600).TextColor(p.Accent)
+						mygoui.Row(c).Height(6).FillWidth().Radius(99).Background(p.ProgressTrack).Clip().Children(func() {
+							mygoui.Box(c).Height(6).WidthPercent(float32(pct * 100)).Radius(99).Background(p.Accent)
 						})
 					})
 				}
 
 				if up.LastError != "" {
-					mygoui.Text(c, up.LastError).FontSize(12).TextColor(zenDanger).Wrap()
+					mygoui.Text(c, up.LastError).FontSize(12).TextColor(p.Danger).Wrap()
 				}
 
 				// Footer CTA buttons.

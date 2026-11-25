@@ -93,6 +93,14 @@ type App struct {
 	windowButtonsMu sync.RWMutex
 	windowButtons   mygo.WindowButtons
 
+	// Light/dark appearance state (systemDark updated by desktop host; live preview while Settings is open).
+	appearanceMu        sync.RWMutex
+	systemDark          bool
+	lastThemePref       string
+	lastThemeDark       bool
+	hasAppliedTheme     bool
+	onAppearanceChanged func(pref string, dark bool)
+
 	// Platform integration hooks (overridable in headless tests).
 	runAsync           func(fn func())
 	winMinimize        func()
@@ -205,6 +213,40 @@ func (a *App) customWindowButtons() mygo.WindowButtons {
 	wb := a.windowButtons
 	a.windowButtonsMu.RUnlock()
 	return wb
+}
+
+// SetSystemDark updates the OS dark mode flag used when theme preference is "auto".
+func (a *App) SetSystemDark(dark bool) {
+	a.appearanceMu.Lock()
+	changed := a.systemDark != dark
+	a.systemDark = dark
+	a.appearanceMu.Unlock()
+	if changed {
+		a.invalidate()
+	}
+}
+
+// SystemDark reports the last observed OS dark mode state.
+func (a *App) SystemDark() bool {
+	a.appearanceMu.RLock()
+	dark := a.systemDark
+	a.appearanceMu.RUnlock()
+	return dark
+}
+
+// SetOnAppearanceChanged registers a callback invoked whenever effective theme preference or dark state changes.
+func (a *App) SetOnAppearanceChanged(fn func(pref string, dark bool)) {
+	a.appearanceMu.Lock()
+	a.onAppearanceChanged = fn
+	a.appearanceMu.Unlock()
+}
+
+func (a *App) effectiveTheme(snap ViewSnapshot) (pref string, dark bool) {
+	pref = model.NormalizeTheme(snap.Config.Theme)
+	if a.settingsOpen {
+		pref = a.settingsDraft.SelectedTheme()
+	}
+	return pref, ResolveDarkMode(pref, a.SystemDark())
 }
 
 // Close stops active inline media playback and releases cached GPU/decoder resources.
@@ -441,8 +483,6 @@ func (a *App) pairingQRBitmap() *mygoui.Bitmap {
 
 // View builds the full Zen Popover native UI tree for each frame.
 func (a *App) View(c *mygoui.Context) {
-	c.SetTheme(zenTheme())
-
 	if a.win == nil {
 		svc := c.Services()
 		a.state.SetInvalidate(svc.Invalidate)
@@ -451,6 +491,24 @@ func (a *App) View(c *mygoui.Context) {
 	}
 
 	a.drainPendingAsync()
+
+	snap := a.state.Snapshot()
+	themePref, dark := a.effectiveTheme(snap)
+	c.SetTheme(zenTheme(dark))
+	p := zenPal(c)
+
+	a.appearanceMu.Lock()
+	var notifyAppearance func(string, bool)
+	if !a.hasAppliedTheme || a.lastThemePref != themePref || a.lastThemeDark != dark {
+		a.hasAppliedTheme = true
+		a.lastThemePref = themePref
+		a.lastThemeDark = dark
+		notifyAppearance = a.onAppearanceChanged
+	}
+	a.appearanceMu.Unlock()
+	if notifyAppearance != nil {
+		notifyAppearance(themePref, dark)
+	}
 
 	// Global window shortcuts.
 	c.OnShortcut(mygoui.Cmd, mygoui.KeyF, func() {
@@ -470,9 +528,7 @@ func (a *App) View(c *mygoui.Context) {
 		a.submitComposer()
 	}
 
-	snap := a.state.Snapshot()
-
-	root := mygoui.Column(c).Fill().Background(zenBg)
+	root := mygoui.Column(c).Fill().Background(p.Bg)
 
 	// Handle direct OS file drops and native transfer drops onto the chat window.
 	if dropped := root.DroppedFiles(); len(dropped) > 0 {
@@ -487,7 +543,7 @@ func (a *App) View(c *mygoui.Context) {
 
 	dragOver := root.FileDragOver()
 	if dragOver {
-		root.Border(2, zenAccent)
+		root.Border(2, p.Accent)
 	}
 
 	var devicesBtn, headerActions mygoui.Element
@@ -528,6 +584,7 @@ func (a *App) anyOverlayOpen() bool {
 
 func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) (mygoui.Element, mygoui.Element) {
 	t := tr(snap.Locale)
+	p := zenPal(c)
 	bar := c.TitleBar()
 	wb := a.customWindowButtons()
 	leftBase := float32(18)
@@ -538,22 +595,22 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) (mygoui.Element
 	rightPad := max(bar.Right+10, 14)
 	headerHeight := max(bar.Height, 60)
 
-	dotColor := zenOffline
-	subColor := zenInkMuted
+	dotColor := p.Offline
+	subColor := p.InkMuted
 	if snap.OnlineCount > 0 {
 		switch {
 		case snap.HasLANDirect:
-			dotColor = zenLANDirect
-			subColor = zenLANDirect
+			dotColor = p.LANDirect
+			subColor = p.LANDirect
 		case snap.HasCustomDirect:
-			dotColor = zenCustomDirect
-			subColor = zenCustomDirect
+			dotColor = p.CustomDirect
+			subColor = p.CustomDirect
 		case snap.HasP2PDirect:
-			dotColor = zenDirect
-			subColor = zenDirectText
+			dotColor = p.Direct
+			subColor = p.DirectText
 		default:
-			dotColor = zenDERP
-			subColor = zenDERPText
+			dotColor = p.DERP
+			subColor = p.DERPText
 		}
 	}
 
@@ -564,9 +621,9 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) (mygoui.Element
 		Padding(0, rightPad, 0, leftPad).
 		Gap(10).
 		AlignItems(mygoui.Center).
-		Background(zenSurface).
+		Background(p.Surface).
 		BorderWidth(0, 0, 1, 0).
-		BorderColor(zenBorder).
+		BorderColor(p.Border).
 		DragWindow().
 		Children(func() {
 			if len(wb.Start) > 0 {
@@ -575,7 +632,7 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) (mygoui.Element
 
 			// Title & live connectivity status stack.
 			mygoui.Column(c).Gap(2).Grow(1).MinWidth(0).Children(func() {
-				mygoui.Text(c, "TailChat").FontSize(15).Bold().TextColor(zenInk).NoWrap()
+				mygoui.Text(c, "TailChat").FontSize(15).Bold().TextColor(p.Ink).NoWrap()
 				mygoui.Row(c).Gap(5).AlignItems(mygoui.Center).Children(func() {
 					mygoui.Box(c).Size(6, 6).Radius(99).Background(dotColor)
 					mygoui.Text(c, snap.ConnectivityTxt).
@@ -639,7 +696,7 @@ func (a *App) renderHeader(c *mygoui.Context, snap ViewSnapshot) (mygoui.Element
 
 			if len(wb.End) > 0 {
 				mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Children(func() {
-					mygoui.Box(c).Size(1, 18).Background(zenBorder).Margin(0, 4, 0, 0)
+					mygoui.Box(c).Size(1, 18).Background(p.Border).Margin(0, 4, 0, 0)
 					a.renderWindowButtons(c, snap.Locale, wb.End, "end")
 				})
 			}
@@ -686,23 +743,24 @@ func (a *App) renderWindowButtons(c *mygoui.Context, loc Locale, buttons []strin
 
 func (a *App) renderSearchDrawer(c *mygoui.Context, loc Locale) {
 	t := tr(loc)
+	p := zenPal(c)
 	mygoui.Row(c).
 		Padding(8, 16).
-		Background(zenSurface).
+		Background(p.Surface).
 		BorderWidth(0, 0, 1, 0).
-		BorderColor(zenBorder).
+		BorderColor(p.Border).
 		AlignItems(mygoui.Center).
 		Children(func() {
 			mygoui.Row(c).
 				Grow(1).
 				Radius(10).
-				Background(zenInputFill).
-				Border(1, zenBorder).
+				Background(p.InputFill).
+				Border(1, p.Border).
 				Padding(6, 10).
 				Gap(7).
 				AlignItems(mygoui.Center).
 				Children(func() {
-					mygoui.Icon(c, iconSearch).Size(14, 14).TextColor(zenInkMuted)
+					mygoui.Icon(c, iconSearch).Size(14, 14).TextColor(p.InkMuted)
 					in := mygoui.TextInputBase(c.Key("search"), &a.searchInput).
 						Placeholder(t.SearchPlaceholder).
 						Label(t.SearchMessages).
@@ -710,7 +768,7 @@ func (a *App) renderSearchDrawer(c *mygoui.Context, loc Locale) {
 						Bind(&a.searchRef).
 						Grow(1).
 						FontSize(12.5).
-						TextColor(zenInk)
+						TextColor(p.Ink)
 					if a.focusSearchPending {
 						a.focusSearchPending = false
 						a.searchRef.Focus()
@@ -722,13 +780,13 @@ func (a *App) renderSearchDrawer(c *mygoui.Context, loc Locale) {
 						clearBtn := mygoui.ButtonBase(c.Key("search-clear")).
 							Size(18, 18).
 							Radius(99).
-							Background(zenTimeChipBg).
+							Background(p.TimeChipBg).
 							Justify(mygoui.Center).
 							AlignItems(mygoui.Center).
 							Cursor(mygoui.CursorPointer).
 							Label(t.ClearSearch).
 							Children(func() {
-								mygoui.Icon(c, iconX).Size(11, 11).TextColor(zenInkSecondary)
+								mygoui.Icon(c, iconX).Size(11, 11).TextColor(p.InkSecondary)
 							})
 						if clearBtn.Clicked() {
 							a.searchInput = ""
@@ -741,22 +799,26 @@ func (a *App) renderSearchDrawer(c *mygoui.Context, loc Locale) {
 }
 
 func (a *App) renderDropOverlayHint(c *mygoui.Context, loc Locale) {
+	p := zenPal(c)
 	mygoui.Row(c).
 		Padding(8, 16).
-		Background(zenAccentSoft).
+		Background(p.AccentSoft).
 		BorderWidth(0, 0, 1, 0).
-		BorderColor(zenAccentBorder).
+		BorderColor(p.AccentBorder).
 		Justify(mygoui.Center).
 		Children(func() {
-			mygoui.Text(c, tr(loc).DropOverlayHint).FontSize(12).Bold().TextColor(zenAccent)
+			mygoui.Text(c, tr(loc).DropOverlayHint).FontSize(12).Bold().TextColor(p.Accent)
 		})
 }
 
 func (a *App) renderToastOverlay(c *mygoui.Context, snap ViewSnapshot) {
 	t := tr(snap.Locale)
-	bg := zenInk
+	p := zenPal(c)
+	bg := p.ToastBg
+	border := p.ToastBorder
 	if snap.ToastIsErr {
-		bg = zenDangerDark
+		bg = p.DangerSolid
+		border = p.DangerBorder
 	}
 	mygoui.Overlay(c, func() {
 		mygoui.Row(c.Key("toast-overlay")).
@@ -773,11 +835,12 @@ func (a *App) renderToastOverlay(c *mygoui.Context, snap ViewSnapshot) {
 					Gap(8).
 					Radius(99).
 					Background(bg).
+					Border(1, border).
 					AlignItems(mygoui.Center).
 					MaxWidthPercent(92).
-					Shadow(0, 8, 20, 0, mygoui.RGBA(15, 23, 42, 0.22)).
+					Shadow(0, 8, 20, 0, p.ShadowModal).
 					Children(func() {
-						mygoui.Text(c, snap.ToastText).FontSize(12).TextColor(zenSelfBubbleInk).Wrap()
+						mygoui.Text(c, snap.ToastText).FontSize(12).TextColor(p.SelfBubbleInk).Wrap()
 						dismiss := mygoui.ButtonBase(c.Key("toast-dismiss")).
 							Size(18, 18).
 							Radius(99).
@@ -787,7 +850,7 @@ func (a *App) renderToastOverlay(c *mygoui.Context, snap ViewSnapshot) {
 							Cursor(mygoui.CursorPointer).
 							Label(t.DismissToast).
 							Children(func() {
-								mygoui.Icon(c, iconX).Size(11, 11).TextColor(zenSelfBubbleInk)
+								mygoui.Icon(c, iconX).Size(11, 11).TextColor(p.SelfBubbleInk)
 							})
 						if dismiss.Clicked() {
 							a.state.ClearToast()
@@ -798,6 +861,7 @@ func (a *App) renderToastOverlay(c *mygoui.Context, snap ViewSnapshot) {
 }
 
 func (a *App) renderTimeline(c *mygoui.Context, snap ViewSnapshot) {
+	p := zenPal(c)
 	msgs := snap.Messages
 	if snap.SearchQuery != "" {
 		msgs = snap.SearchResults
@@ -828,9 +892,9 @@ func (a *App) renderTimeline(c *mygoui.Context, snap ViewSnapshot) {
 							AlignSelf(mygoui.Center).
 							Padding(3, 10).
 							Radius(99).
-							Background(zenTimeChipBg).
+							Background(p.TimeChipBg).
 							Children(func() {
-								mygoui.Text(c, chip).FontSize(11).TextColor(zenInkMuted)
+								mygoui.Text(c, chip).FontSize(11).TextColor(p.InkMuted)
 							})
 					}
 				}
@@ -845,6 +909,7 @@ func (a *App) renderTimeline(c *mygoui.Context, snap ViewSnapshot) {
 
 func (a *App) renderEmptyState(c *mygoui.Context, loc Locale, searchQuery string) {
 	t := tr(loc)
+	p := zenPal(c)
 	title := t.EmptyTitle
 	subtitle := t.EmptySubtitle
 	icon := iconLaptop
@@ -861,27 +926,28 @@ func (a *App) renderEmptyState(c *mygoui.Context, loc Locale, searchQuery string
 		Padding(22, 24).
 		Gap(10).
 		Radius(16).
-		Background(zenSurface).
-		Border(1, zenBorder).
-		Shadow(0, 3, 12, 0, mygoui.RGBA(15, 23, 42, 0.05)).
+		Background(p.Surface).
+		Border(1, p.Border).
+		Shadow(0, 3, 12, 0, p.ShadowSoft).
 		AlignItems(mygoui.Center).
 		Children(func() {
 			mygoui.Row(c).
 				Size(42, 42).
 				Radius(12).
-				Background(zenAccentSoft).
+				Background(p.AccentSoft).
 				Justify(mygoui.Center).
 				AlignItems(mygoui.Center).
 				Children(func() {
-					mygoui.Icon(c, icon).Size(20, 20).TextColor(zenAccent)
+					mygoui.Icon(c, icon).Size(20, 20).TextColor(p.Accent)
 				})
-			mygoui.Text(c, title).FontSize(14).Bold().TextColor(zenInk)
-			mygoui.Text(c, subtitle).FontSize(12).TextColor(zenInkSecondary).Wrap()
+			mygoui.Text(c, title).FontSize(14).Bold().TextColor(p.Ink)
+			mygoui.Text(c, subtitle).FontSize(12).TextColor(p.InkSecondary).Wrap()
 		})
 }
 
 func (a *App) renderMessageBubble(c *mygoui.Context, snap ViewSnapshot, msg model.Message) {
 	t := tr(snap.Locale)
+	p := zenPal(c)
 	isSelf := snap.Identity.DeviceID != "" && msg.AuthorDeviceID == snap.Identity.DeviceID
 	ts := FormatTimestamp(msg.CreatedAt)
 
@@ -902,11 +968,11 @@ func (a *App) renderMessageBubble(c *mygoui.Context, snap ViewSnapshot, msg mode
 				if ts != "" {
 					label += " · " + ts
 				}
-				mygoui.Text(c, label).FontSize(11).TextColor(zenInkMuted)
+				mygoui.Text(c, label).FontSize(11).TextColor(p.InkMuted)
 			} else {
 				mygoui.Icon(c, deviceIconForAuthor(msg.AuthorDeviceID, snap.Devices)).
 					Size(12, 12).
-					TextColor(zenInkMuted)
+					TextColor(p.InkMuted)
 				author := msg.AuthorName
 				if author == "" {
 					author = shortID(msg.AuthorDeviceID)
@@ -914,7 +980,7 @@ func (a *App) renderMessageBubble(c *mygoui.Context, snap ViewSnapshot, msg mode
 				if ts != "" {
 					author += " · " + ts
 				}
-				mygoui.Text(c, author).FontSize(11).TextColor(zenInkMuted)
+				mygoui.Text(c, author).FontSize(11).TextColor(p.InkMuted)
 			}
 		})
 
@@ -925,12 +991,12 @@ func (a *App) renderMessageBubble(c *mygoui.Context, snap ViewSnapshot, msg mode
 				mygoui.Column(c).
 					Padding(10, 14).
 					Radius(16, 5, 16, 16).
-					Background(zenSelfBubbleBg).
-					Shadow(0, 2, 8, 0, mygoui.RGBA(15, 23, 42, 0.10)).
+					Background(p.SelfBubbleBg).
+					Shadow(0, 2, 8, 0, p.ShadowCard).
 					Children(func() {
 						mygoui.Text(c, msg.TextBody).
 							FontSize(13.5).
-							TextColor(zenSelfBubbleInk).
+							TextColor(p.SelfBubbleInk).
 							Wrap().
 							Selectable()
 					})
@@ -938,13 +1004,13 @@ func (a *App) renderMessageBubble(c *mygoui.Context, snap ViewSnapshot, msg mode
 				mygoui.Column(c).
 					Padding(10, 14).
 					Radius(5, 16, 16, 16).
-					Background(zenSurface).
-					Border(1, zenBorder).
-					Shadow(0, 2, 8, 0, mygoui.RGBA(15, 23, 42, 0.05)).
+					Background(p.Surface).
+					Border(1, p.Border).
+					Shadow(0, 2, 8, 0, p.ShadowSoft).
 					Children(func() {
 						mygoui.Text(c, msg.TextBody).
 							FontSize(13.5).
-							TextColor(zenInk).
+							TextColor(p.Ink).
 							Wrap().
 							Selectable()
 					})
@@ -977,15 +1043,16 @@ func (a *App) renderMessageBubble(c *mygoui.Context, snap ViewSnapshot, msg mode
 
 func (a *App) renderFileBubble(c *mygoui.Context, snap ViewSnapshot, msg model.Message) {
 	t := tr(snap.Locale)
+	p := zenPal(c)
 	fb := msg.File
 	if fb == nil {
 		mygoui.Column(c).
 			Padding(10, 14).
 			Radius(16).
-			Background(zenSurface).
-			Border(1, zenBorder).
+			Background(p.Surface).
+			Border(1, p.Border).
 			Children(func() {
-				mygoui.Text(c, t.FilePrefix+shortID(msg.BlobHash)).FontSize(13).TextColor(zenInkMuted)
+				mygoui.Text(c, t.FilePrefix+shortID(msg.BlobHash)).FontSize(13).TextColor(p.InkMuted)
 			})
 		return
 	}
@@ -1013,9 +1080,10 @@ func (a *App) renderFileBubble(c *mygoui.Context, snap ViewSnapshot, msg model.M
 
 func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg model.Message, isLocal, showProgress bool, task model.TransferTask) {
 	t := tr(snap.Locale)
+	p := zenPal(c)
 	fb := msg.File
 	_, hasTask := snap.Transfers[fb.BlobHash]
-	ext, tileBg, tileFg := zenFileTileColors(fb.FileName)
+	ext, tileBg, tileFg := zenFileTileColors(fb.FileName, p.Dark)
 
 	var meta string
 	switch {
@@ -1048,9 +1116,9 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 		Padding(12, 14).
 		Gap(10).
 		Radius(16).
-		Background(zenSurface).
-		Border(1, zenBorder).
-		Shadow(0, 3, 12, 0, mygoui.RGBA(15, 23, 42, 0.06)).
+		Background(p.Surface).
+		Border(1, p.Border).
+		Shadow(0, 3, 12, 0, p.ShadowSoft).
 		Clip().
 		Children(func() {
 			// File header: extension tile + filename & metadata.
@@ -1074,12 +1142,12 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 					mygoui.Text(c, fb.FileName).
 						FontSize(13.5).
 						FontWeight(600).
-						TextColor(zenInk).
+						TextColor(p.Ink).
 						FillWidth().
 						SingleLine()
 					mygoui.Text(c, meta).
 						FontSize(11.5).
-						TextColor(zenInkSecondary).
+						TextColor(p.InkSecondary).
 						FillWidth().
 						SingleLine()
 				})
@@ -1089,9 +1157,9 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 				headerBtn := mygoui.ButtonBase(c.Key("open-direct-" + msg.MsgID))
 				hdrBg := mygoui.RGBA(0, 0, 0, 0)
 				if headerBtn.Pressed() {
-					hdrBg = zenInputFill
+					hdrBg = p.InputFill
 				} else if headerBtn.Hovered() {
-					hdrBg = zenSurfaceSubtle
+					hdrBg = p.SurfaceSubtle
 				}
 				headerBtn.Gap(11).
 					Padding(4).
@@ -1122,17 +1190,17 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 				if pct > 1 {
 					pct = 1
 				}
-				barColor := zenAccent
+				barColor := p.Accent
 				if task.State == model.TransferPaused {
-					barColor = zenInkMuted
+					barColor = p.InkMuted
 				} else if task.State == model.TransferFailed {
-					barColor = zenDanger
+					barColor = p.Danger
 				}
 				mygoui.Row(c).
 					Height(6).
 					FillWidth().
 					Radius(99).
-					Background(zenProgressTrack).
+					Background(p.ProgressTrack).
 					Clip().
 					Label(t.TransferProgress).
 					Children(func() {
@@ -1148,7 +1216,7 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 			mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
 				mygoui.Text(c, footText).
 					FontSize(11.5).
-					TextColor(zenInkMuted).
+					TextColor(p.InkMuted).
 					Grow(1).
 					MinWidth(0).
 					SingleLine()
@@ -1191,6 +1259,7 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 
 func (a *App) renderComposer(c *mygoui.Context, loc Locale, dragOver bool) {
 	t := tr(loc)
+	p := zenPal(c)
 	mygoui.Column(c).
 		Padding(4, 14, 14, 14).
 		Gap(8).
@@ -1201,22 +1270,22 @@ func (a *App) renderComposer(c *mygoui.Context, loc Locale, dragOver bool) {
 				mygoui.Row(c).
 					Padding(6, 12).
 					Radius(99).
-					Background(zenAccentSoft).
-					Border(1, zenAccent).
+					Background(p.AccentSoft).
+					Border(1, p.Accent).
 					BorderStyle(mygoui.BorderDashed).
 					Justify(mygoui.Center).
 					Clip().
 					Children(func() {
-						mygoui.Text(c, t.DropStripActive).FontSize(11.5).FontWeight(600).TextColor(zenAccent).SingleLine()
+						mygoui.Text(c, t.DropStripActive).FontSize(11.5).FontWeight(600).TextColor(p.Accent).SingleLine()
 					})
 			}
 
 			// Floating Capsule (Option A): single sculpted pill containing quick actions, borderless input, lock toggle & send CTA.
-			capBorder := zenBorder
-			capShadow := mygoui.RGBA(15, 23, 42, 0.08)
+			capBorder := p.Border
+			capShadow := p.ShadowCard
 			if dragOver {
-				capBorder = zenAccent
-				capShadow = mygoui.RGBA(10, 132, 255, 0.18)
+				capBorder = p.Accent
+				capShadow = p.Accent.Alpha(0.24)
 			}
 
 			mygoui.Row(c).
@@ -1224,7 +1293,7 @@ func (a *App) renderComposer(c *mygoui.Context, loc Locale, dragOver bool) {
 				Padding(6, 7, 6, 8).
 				Gap(4).
 				Radius(26).
-				Background(zenSurface).
+				Background(p.Surface).
 				Border(1, capBorder).
 				Shadow(0, 8, 24, 0, capShadow).
 				AlignItems(mygoui.Center).
@@ -1239,7 +1308,7 @@ func (a *App) renderComposer(c *mygoui.Context, loc Locale, dragOver bool) {
 
 					// Hairline vertical divider separating quick actions from text input.
 					mygoui.Row(c).Padding(0, 3).AlignItems(mygoui.Center).Shrink(0).Children(func() {
-						mygoui.Box(c).Size(1, 18).Background(zenBorder)
+						mygoui.Box(c).Size(1, 18).Background(p.Border)
 					})
 
 					var in mygoui.Element
@@ -1255,7 +1324,7 @@ func (a *App) renderComposer(c *mygoui.Context, loc Locale, dragOver bool) {
 								Bind(&a.composerRef).
 								FillWidth().
 								FontSize(13.5).
-								TextColor(zenInk)
+								TextColor(p.Ink)
 						})
 
 					if zenCapsuleIconBtn(c, "btn-concealed", iconLock, t.PrivateCopy, 30, 14, true, a.concealedCopy).Clicked() {
@@ -1269,15 +1338,15 @@ func (a *App) renderComposer(c *mygoui.Context, loc Locale, dragOver bool) {
 
 					canSend := strings.TrimSpace(a.composer) != ""
 					sendBtn := mygoui.ButtonBase(c.Key("btn-send"))
-					sendBg := zenProgressTrack
-					sendFg := zenInkMuted
+					sendBg := p.ProgressTrack
+					sendFg := p.InkMuted
 					if canSend {
-						sendBg = zenAccent
-						sendFg = zenSelfBubbleInk
+						sendBg = p.AccentSolid
+						sendFg = p.SelfBubbleInk
 						if sendBtn.Pressed() {
-							sendBg = zenAccentPressed
+							sendBg = p.AccentPressed
 						} else if sendBtn.Hovered() {
-							sendBg = zenAccentHover
+							sendBg = p.AccentHover
 						}
 					}
 					sendBtn.Size(36, 36).
@@ -1291,7 +1360,7 @@ func (a *App) renderComposer(c *mygoui.Context, loc Locale, dragOver bool) {
 						Tooltip(t.SendTooltip)
 					if canSend {
 						sendBtn.Cursor(mygoui.CursorPointer).
-							Shadow(0, 3, 10, 0, mygoui.RGBA(10, 132, 255, 0.28))
+							Shadow(0, 3, 10, 0, p.AccentSolid.Alpha(0.32))
 					}
 					sendBtn.Children(func() {
 						mygoui.Icon(c, iconArrowUp).Size(16, 16).TextColor(sendFg)

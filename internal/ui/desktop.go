@@ -110,6 +110,15 @@ func Run(api model.AppAPI, onReady func()) error {
 		}
 		state.Start(rootCtx)
 
+		initialPref := model.NormalizeTheme(state.Config().Theme)
+		initialSysDark := mygo.Theme.IsDark()
+		app.SetSystemDark(initialSysDark)
+		initialSource := nativeThemeSource(initialPref)
+		if initialSource != mygo.ThemeSystem {
+			mygo.Theme.SetSource(initialSource)
+		}
+		initialDark := ResolveDarkMode(initialPref, initialSysDark)
+
 		w := mygo.NewWindow(mygo.WindowOptions{
 			Title:                "TailChat",
 			Width:                540,
@@ -119,7 +128,7 @@ func Run(api model.AppAPI, onReady func()) error {
 			TitleBarStyle:        mygo.TitleBarHiddenInset,
 			HideWindowButtons:    runtime.GOOS == "linux",
 			TrafficLightPosition: &mygo.Point{X: 16, Y: 22},
-			BackgroundColor:      "#F3F5F9",
+			BackgroundColor:      WindowBgHex(initialDark),
 			StateKey:             "tailchat-zen-v1",
 			Content:              mygoui.View(app.View),
 		})
@@ -130,16 +139,77 @@ func Run(api model.AppAPI, onReady func()) error {
 		app.SetWindow(w)
 		state.SetInvalidate(w.Invalidate)
 
+		applyWindowAppearance := func(pref string, dark bool) {
+			src := nativeThemeSource(pref)
+			if mygo.Theme.Source() != src {
+				mygo.Theme.SetSource(src)
+			}
+			_ = w.SetBackgroundColor(WindowBgHex(dark))
+			if dark {
+				w.SetWindowButtonsTheme(mygo.ThemeDark)
+			} else {
+				w.SetWindowButtonsTheme(mygo.ThemeLight)
+			}
+		}
+		applyWindowAppearance(initialPref, initialDark)
+
+		app.SetOnAppearanceChanged(func(pref string, dark bool) {
+			mygo.RunOnMain(func() {
+				mu.Lock()
+				isClosed := closed
+				mu.Unlock()
+				if isClosed {
+					return
+				}
+				src := nativeThemeSource(pref)
+				if mygo.Theme.Source() != src {
+					mygo.Theme.SetSource(src)
+				}
+				if src == mygo.ThemeSystem {
+					// Re-read real OS dark state after restoring ThemeSystem.
+					mygo.RunOnMain(func() {
+						sysDark := mygo.Theme.IsDark()
+						app.SetSystemDark(sysDark)
+						effDark := ResolveDarkMode(pref, sysDark)
+						_ = w.SetBackgroundColor(WindowBgHex(effDark))
+						if effDark {
+							w.SetWindowButtonsTheme(mygo.ThemeDark)
+						} else {
+							w.SetWindowButtonsTheme(mygo.ThemeLight)
+						}
+					})
+					return
+				}
+				_ = w.SetBackgroundColor(WindowBgHex(dark))
+				if dark {
+					w.SetWindowButtonsTheme(mygo.ThemeDark)
+				} else {
+					w.SetWindowButtonsTheme(mygo.ThemeLight)
+				}
+			})
+		})
+
 		if runtime.GOOS == "linux" {
 			wb := mygo.Theme.WindowButtons()
 			log.Printf("tailchat: linux window buttons layout: start=%v end=%v", wb.Start, wb.End)
 			app.SetCustomWindowButtons(wb)
-			mygo.Theme.OnUpdated(func() {
-				app.SetCustomWindowButtons(mygo.Theme.WindowButtons())
-			})
 			w.OnMaximize(w.Invalidate)
 			w.OnUnmaximize(w.Invalidate)
 		}
+
+		mygo.Theme.OnUpdated(func() {
+			if runtime.GOOS == "linux" {
+				app.SetCustomWindowButtons(mygo.Theme.WindowButtons())
+			}
+			if mygo.Theme.Source() == mygo.ThemeSystem {
+				sysDark := mygo.Theme.IsDark()
+				app.SetSystemDark(sysDark)
+				pref := model.NormalizeTheme(state.Config().Theme)
+				if pref == model.ThemeAuto {
+					applyWindowAppearance(pref, sysDark)
+				}
+			}
+		})
 
 		w.OnClose(func(e *mygo.CloseEvent) {
 			mu.Lock()
@@ -151,9 +221,10 @@ func Run(api model.AppAPI, onReady func()) error {
 			}
 		})
 
+		var onQuickPair func()
 		// Desktop-only integrations: system tray & global hotkey.
 		if isDesktopPlatform() {
-			onQuickPair := func() {
+			onQuickPair = func() {
 				showAndFocus()
 				app.OpenPairingModal()
 			}
@@ -161,21 +232,6 @@ func Run(api model.AppAPI, onReady func()) error {
 				mu.Lock()
 				tray = t
 				mu.Unlock()
-
-				state.SetOnConfigChanged(func(cfg model.AppConfig) {
-					loc := ResolveLocale(cfg.Language)
-					mygo.RunOnMain(func() {
-						mu.Lock()
-						curTray := tray
-						isClosed := closed
-						mu.Unlock()
-						if curTray == nil || isClosed {
-							return
-						}
-						curTray.SetMenu(buildTrayMenu(loc, toggleWindow, onQuickPair))
-						curTray.SetToolTip(tr(loc).TrayTooltip)
-					})
-				})
 			}
 
 			hotkey := state.Config().GlobalHotkey
@@ -186,6 +242,34 @@ func Run(api model.AppAPI, onReady func()) error {
 				log.Printf("tailchat: global shortcut %q unavailable: %v", hotkey, err)
 			}
 		}
+
+		state.SetOnConfigChanged(func(cfg model.AppConfig) {
+			loc := ResolveLocale(cfg.Language)
+			themePref := model.NormalizeTheme(cfg.Theme)
+			mygo.RunOnMain(func() {
+				mu.Lock()
+				curTray := tray
+				isClosed := closed
+				mu.Unlock()
+				if isClosed {
+					return
+				}
+				src := nativeThemeSource(themePref)
+				if mygo.Theme.Source() != src {
+					mygo.Theme.SetSource(src)
+				}
+				if src == mygo.ThemeSystem {
+					sysDark := mygo.Theme.IsDark()
+					app.SetSystemDark(sysDark)
+				}
+				effDark := ResolveDarkMode(themePref, app.SystemDark())
+				applyWindowAppearance(themePref, effDark)
+				if curTray != nil && onQuickPair != nil {
+					curTray.SetMenu(buildTrayMenu(loc, toggleWindow, onQuickPair))
+					curTray.SetToolTip(tr(loc).TrayTooltip)
+				}
+			})
+		})
 
 		// Local desktop notification when a remote message arrives while unfocused.
 		state.SetOnRemoteMessage(func(msg model.Message) {
@@ -304,3 +388,15 @@ func trayIconPNG() []byte {
 	}
 	return trayIconColorPNG
 }
+
+func nativeThemeSource(pref string) mygo.ThemeSource {
+	switch model.NormalizeTheme(pref) {
+	case model.ThemeLight:
+		return mygo.ThemeLight
+	case model.ThemeDark:
+		return mygo.ThemeDark
+	default:
+		return mygo.ThemeSystem
+	}
+}
+
