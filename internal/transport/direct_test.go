@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/yamux"
+
 	"tailchat/internal/model"
 )
 
@@ -468,3 +470,128 @@ func TestDirectFallbackToSecondCandidateAndUpgrade(t *testing.T) {
 		return false
 	})
 }
+
+func TestSetGroupIdentityRebuildsDirectCertWithoutRestart(t *testing.T) {
+	idMac, err := GenerateLocalIdentity("macos-host", "macos")
+	if err != nil {
+		t.Fatalf("GenerateLocalIdentity mac: %v", err)
+	}
+	// Fresh Windows install starts with its own distinct initial GroupID before pairing.
+	idWin, err := GenerateLocalIdentity("win-joiner", "windows")
+	if err != nil {
+		t.Fatalf("GenerateLocalIdentity win: %v", err)
+	}
+	if idWin.GroupID == idMac.GroupID {
+		t.Fatalf("expected distinct initial GroupIDs before pairing")
+	}
+
+	macMesh, macAddr := startDirectOnlyMesh(t, idMac, true)
+	winMesh, winAddr := startDirectOnlyMesh(t, idWin, true)
+
+	macMesh.SetAllowedPeers([]model.Device{makePeerDevice(idWin)})
+	winMesh.SetAllowedPeers([]model.Device{makePeerDevice(idMac)})
+	psMacOnWin := ensureTestPeer(t, winMesh, makePeerDevice(idMac))
+	psWinOnMac := ensureTestPeer(t, macMesh, makePeerDevice(idWin))
+
+	winMesh.mu.Lock()
+	winMesh.peerDirectOverrides = map[string]string{idMac.DeviceID: macAddr}
+	winMesh.mu.Unlock()
+	macMesh.mu.Lock()
+	macMesh.peerLearnedDirect = map[string][]string{idWin.DeviceID: {winAddr}}
+	macMesh.mu.Unlock()
+
+	// Before adopting macOS's GroupID, direct mTLS must reject with group mismatch.
+	if sess, _, _, _, err := winMesh.dialDirectPeer(context.Background(), psMacOnWin); err == nil {
+		_ = sess.Close()
+		t.Fatalf("expected direct mTLS to fail before SetGroupIdentity")
+	}
+
+	// Simulate JoinWithPairingCode adopting macOS's GroupID + root secret WITHOUT restart.
+	winMesh.SetGroupIdentity(idMac.GroupID, idMac.GroupPrivateKey)
+
+	// Outbound Windows -> macOS must now succeed immediately as ConnPathCustomDirect.
+	sessOut, _, kindOut, _, err := winMesh.dialDirectPeer(context.Background(), psMacOnWin)
+	if err != nil {
+		t.Fatalf("expected outbound direct mTLS to succeed after SetGroupIdentity, got: %v", err)
+	}
+	_ = sessOut.Close()
+	if kindOut != model.ConnPathCustomDirect {
+		t.Fatalf("kindOut = %q, want %q", kindOut, model.ConnPathCustomDirect)
+	}
+
+	// Inbound macOS -> Windows must also succeed immediately because Windows rebuilt its server directCert.
+	sessIn, _, kindIn, _, err := macMesh.dialDirectPeer(context.Background(), psWinOnMac)
+	if err != nil {
+		t.Fatalf("expected inbound direct mTLS to Windows to succeed after SetGroupIdentity, got: %v", err)
+	}
+	_ = sessIn.Close()
+	if kindIn != model.ConnPathLAN {
+		t.Fatalf("kindIn = %q, want %q", kindIn, model.ConnPathLAN)
+	}
+}
+
+func TestConfigureDirectUpgradesExistingInboundSessionOnCustomIP(t *testing.T) {
+	// Generate two identities and assign idHigh > idLow so the joining peer starts with dialActive=false.
+	id1, err := GenerateLocalIdentity("node-1", "macos")
+	if err != nil {
+		t.Fatalf("GenerateLocalIdentity 1: %v", err)
+	}
+	id2, err := GenerateLocalIdentity("node-2", "windows")
+	if err != nil {
+		t.Fatalf("GenerateLocalIdentity 2: %v", err)
+	}
+	idLow, idHigh := id1, id2
+	if idLow.DeviceID > idHigh.DeviceID {
+		idLow, idHigh = id2, id1
+	}
+	idHigh.GroupID = idLow.GroupID
+
+	macMesh, macAddr := startDirectOnlyMesh(t, idLow, true)
+	winMesh, _ := startDirectOnlyMesh(t, idHigh, false)
+
+	macMesh.SetAllowedPeers([]model.Device{makePeerDevice(idHigh)})
+	winMesh.SetAllowedPeers([]model.Device{makePeerDevice(idLow)})
+	ps := ensureTestPeer(t, winMesh, makePeerDevice(idLow))
+
+	// Simulate an already-active non-direct Tailcat inbound session (e.g. P2P UDP) with dialActive=false.
+	c1, c2 := net.Pipe()
+	t.Cleanup(func() { _ = c1.Close(); _ = c2.Close() })
+	fakeInSess, err := yamux.Server(c1, newYamuxConfig())
+	if err != nil {
+		t.Fatalf("yamux.Server pipe: %v", err)
+	}
+	t.Cleanup(func() { _ = fakeInSess.Close() })
+	fakeRemoteSess, err := yamux.Client(c2, newYamuxConfig())
+	if err != nil {
+		t.Fatalf("yamux.Client pipe: %v", err)
+	}
+	t.Cleanup(func() { _ = fakeRemoteSess.Close() })
+
+	ps.mu.Lock()
+	ps.inSession = fakeInSess
+	ps.inIsDirect = false
+	ps.dialActive = false
+	ps.status = model.PeerConnStatus{
+		DeviceID:  idLow.DeviceID,
+		Connected: true,
+		PathKind:  model.ConnPathDirect,
+		Endpoint:  "192.168.1.10:41641",
+	}
+	ps.mu.Unlock()
+
+	// User manually configures macOS's LAN IP on Windows -> must immediately dial and upgrade to ConnPathCustomDirect
+	// without waiting for the existing Tailcat inbound session to close or restarting the app.
+	if err := winMesh.ConfigureDirect(0, map[string]string{idLow.DeviceID: macAddr}, nil); err != nil {
+		t.Fatalf("ConfigureDirect: %v", err)
+	}
+
+	waitMeshCondition(t, 4*time.Second, "ConfigureDirect upgrades existing inbound Tailcat session to ConnPathCustomDirect", func() bool {
+		for _, st := range winMesh.PeerStatuses() {
+			if st.DeviceID == idLow.DeviceID && st.Connected && st.PathKind == model.ConnPathCustomDirect && st.Endpoint == macAddr {
+				return true
+			}
+		}
+		return false
+	})
+}
+

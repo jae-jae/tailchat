@@ -404,11 +404,24 @@ func (m *TailcatMesh) CurrentRoute() model.RouteRecord {
 	return r
 }
 
-// SetGroupSecret updates the group secret used to derive per-pair outbound client keys
-// (called when a newly paired device adopts an existing group's root key).
+// SetGroupSecret updates the group secret used to derive per-pair outbound client keys.
 func (m *TailcatMesh) SetGroupSecret(secret []byte) {
+	m.SetGroupIdentity("", secret)
+}
+
+// SetGroupIdentity updates the adopted group ID and group root secret when a newly paired
+// device joins an existing group, and rebuilds the in-memory direct mTLS certificate so
+// LAN / custom-IP direct connections work immediately without restarting the process.
+func (m *TailcatMesh) SetGroupIdentity(groupID string, secret []byte) {
+	groupID = strings.TrimSpace(groupID)
+
 	m.mu.Lock()
+	groupChanged := groupID != "" && m.id.GroupID != groupID
+	if groupID != "" {
+		m.id.GroupID = groupID
+	}
 	m.groupSecret = append([]byte(nil), secret...)
+	idCopy := m.id
 	selfID := m.id.DeviceID
 	for devID := range m.allowedKeys {
 		if oldPub, ok := m.deviceClientPubs[devID]; ok {
@@ -423,6 +436,20 @@ func (m *TailcatMesh) SetGroupSecret(secret []byte) {
 		}
 	}
 	m.mu.Unlock()
+
+	if groupChanged && len(idCopy.SignPrivateKey) == ed25519.PrivateKeySize {
+		cert, err := buildIdentityTLSCert(idCopy)
+		if err != nil {
+			log.Printf("tailcat: failed to rebuild direct mTLS cert for group %s: %v", shortIDForLog(idCopy.GroupID), err)
+			return
+		}
+		m.mu.Lock()
+		if m.id.GroupID == idCopy.GroupID {
+			m.directCert = cert
+		}
+		m.mu.Unlock()
+		log.Printf("tailcat: rebuilt direct mTLS cert for adopted group %s", shortIDForLog(idCopy.GroupID))
+	}
 }
 
 // SetAllowedPeers updates the server allowlist and disconnects any peer removed from it.
@@ -1183,16 +1210,18 @@ func (m *TailcatMesh) acceptLoop(srv *tailcat.Server, ln net.Listener) {
 
 		ps := m.getOrCreatePeer(peerDeviceID, devicePub)
 		var prevIn *yamux.Session
-		var keepDirect bool
+		var hasActiveDirect bool
 		ps.mu.Lock()
 		if ps.revoked {
 			ps.mu.Unlock()
 			_ = sess.Close()
 			continue
 		}
-		if ps.inSession != nil && !ps.inSession.IsClosed() && ps.inIsDirect {
-			// Keep the active direct inbound session as primary, while still serving streams on this DERP session.
-			keepDirect = true
+		outDirectActive := ps.outSession != nil && !ps.outSession.IsClosed() && ps.outIsDirect
+		inDirectActive := ps.inSession != nil && !ps.inSession.IsClosed() && ps.inIsDirect
+		hasActiveDirect = outDirectActive || inDirectActive
+		if inDirectActive {
+			// Keep the active direct inbound session as primary, while still serving streams on this Tailcat session.
 		} else {
 			prevIn = ps.inSession
 			ps.inSession = sess
@@ -1207,7 +1236,7 @@ func (m *TailcatMesh) acceptLoop(srv *tailcat.Server, ln net.Listener) {
 			_ = prevIn.Close()
 		}
 
-		if !keepDirect {
+		if !hasActiveDirect {
 			m.inspectInboundStatus(srv, ps, sess)
 		}
 
@@ -1380,7 +1409,6 @@ func (m *TailcatMesh) pollPeerStatuses(ctx context.Context) {
 		return
 	}
 	srv := m.server
-	selfID := m.id.DeviceID
 	peers := m.snapshotPeersLocked()
 	overrideIDs := make(map[string]bool, len(m.peerDirectOverrides))
 	for id, addr := range m.peerDirectOverrides {
@@ -1415,10 +1443,18 @@ func (m *TailcatMesh) pollPeerStatuses(ctx context.Context) {
 
 		if outOpen && outDirect {
 			m.probeDirectSession(ps, outSess, outDirectKind, outDirectAddr)
+			if overrideIDs[ps.deviceID] && outDirectKind != model.ConnPathCustomDirect {
+				p := ps
+				m.goSpawn(func() { m.tryUpgradeToDirect(ctx, p, false) })
+			}
 			continue
 		}
 		if inOpen && inDirect {
 			m.probeDirectSession(ps, inSess, inDirectKind, inDirectAddr)
+			if overrideIDs[ps.deviceID] && inDirectKind != model.ConnPathCustomDirect {
+				p := ps
+				m.goSpawn(func() { m.tryUpgradeToDirect(ctx, p, false) })
+			}
 			continue
 		}
 
@@ -1428,8 +1464,10 @@ func (m *TailcatMesh) pollPeerStatuses(ctx context.Context) {
 			m.inspectInboundStatus(srv, ps, inSess)
 		}
 
-		// Background DERP -> Direct upgrade when direct candidates exist.
-		if (outOpen || inOpen) && (selfID < ps.deviceID || overrideIDs[ps.deviceID]) && len(m.directCandidatesForPeer(ps.deviceID)) > 0 {
+		// Background Tailcat -> Direct mTLS upgrade whenever direct candidates exist.
+		// Allowing either side (not only selfID < peerID) handles asymmetric firewalls
+		// such as Windows Firewall blocking inbound TCP while macOS accepts inbound TCP.
+		if (outOpen || inOpen) && len(m.directCandidatesForPeer(ps.deviceID)) > 0 {
 			p := ps
 			m.goSpawn(func() { m.tryUpgradeToDirect(ctx, p, false) })
 		}
@@ -1445,6 +1483,15 @@ func (m *TailcatMesh) probeOutboundClient(ctx context.Context, ps *peerState, cl
 		return
 	}
 	if res.Err != "" {
+		return
+	}
+
+	ps.mu.Lock()
+	stillTailcatPrimary := ps.outClient == client &&
+		!ps.outIsDirect &&
+		!(ps.inSession != nil && !ps.inSession.IsClosed() && ps.inIsDirect)
+	ps.mu.Unlock()
+	if !stillTailcatPrimary {
 		return
 	}
 

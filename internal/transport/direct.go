@@ -374,6 +374,7 @@ func (m *TailcatMesh) ConfigureDirect(listenPort int, peerOverrides map[string]s
 		var startDial bool
 		var resetDirect bool
 		var tryUpgrade bool
+		var upgradeDelay time.Duration
 
 		ps.mu.Lock()
 		if !ps.revoked {
@@ -393,13 +394,28 @@ func (m *TailcatMesh) ConfigureDirect(listenPort int, peerOverrides map[string]s
 					resetDirect = true
 				}
 			}
-			// If currently connected over DERP and we now have direct candidates, proactively upgrade.
-			isAlreadyDirect := (ps.outSession != nil && !ps.outSession.IsClosed() && ps.outIsDirect) ||
-				(ps.inSession != nil && !ps.inSession.IsClosed() && ps.inIsDirect)
-			isConnected := (ps.outSession != nil && !ps.outSession.IsClosed()) ||
-				(ps.inSession != nil && !ps.inSession.IsClosed())
-			if isConnected && !isAlreadyDirect && (hasOverride || hasLearned) && shouldDial {
-				tryUpgrade = true
+			// Proactively upgrade connected peers to direct TCP+mTLS:
+			// 1. Custom IP override: upgrade immediately even from Tailcat P2P/DERP or auto-LAN.
+			// 2. Auto-discovered LAN: designated dialer (selfID < peerID) upgrades immediately;
+			//    reverse side waits briefly so symmetric LAN uses a single connection while
+			//    asymmetric firewalls (e.g. Windows Defender blocking inbound TCP) still upgrade.
+			outOpen := ps.outSession != nil && !ps.outSession.IsClosed()
+			inOpen := ps.inSession != nil && !ps.inSession.IsClosed()
+			isAlreadyDirect := (outOpen && ps.outIsDirect) || (inOpen && ps.inIsDirect)
+			isConnected := outOpen || inOpen
+			alreadyOnTargetCustom := hasOverride &&
+				outOpen && ps.outIsDirect &&
+				ps.outDirectKind == model.ConnPathCustomDirect &&
+				ps.outDirectAddr == newOverride
+			if isConnected {
+				if hasOverride && !alreadyOnTargetCustom {
+					tryUpgrade = true
+				} else if !isAlreadyDirect && hasLearned {
+					tryUpgrade = true
+					if !shouldDial {
+						upgradeDelay = 1500 * time.Millisecond
+					}
+				}
 			}
 		}
 		ps.mu.Unlock()
@@ -422,9 +438,16 @@ func (m *TailcatMesh) ConfigureDirect(listenPort int, peerOverrides map[string]s
 					cancel()
 				}
 			}
-		} else if tryUpgrade {
+		}
+		if tryUpgrade {
 			p := ps
-			m.goSpawn(func() { m.tryUpgradeToDirect(rootCtx, p, true) })
+			delay := upgradeDelay
+			m.goSpawn(func() {
+				if delay > 0 && !sleepCtx(rootCtx, delay) {
+					return
+				}
+				m.tryUpgradeToDirect(rootCtx, p, true)
+			})
 		}
 	}
 
@@ -836,8 +859,9 @@ func (m *TailcatMesh) dialDirectCandidate(
 	return sess, rttMs, nil
 }
 
-// tryUpgradeToDirect attempts to upgrade a peer currently using DERP relay to a
-// direct TCP+mTLS session without interrupting traffic if direct is unreachable.
+// tryUpgradeToDirect attempts to upgrade a peer currently using Tailcat (P2P/DERP)
+// or auto-LAN to the highest-priority direct TCP+mTLS session without interrupting
+// existing traffic if direct dialing fails.
 func (m *TailcatMesh) tryUpgradeToDirect(ctx context.Context, ps *peerState, force bool) {
 	if ctx == nil || ctx.Err() != nil {
 		return
@@ -846,14 +870,25 @@ func (m *TailcatMesh) tryUpgradeToDirect(ctx context.Context, ps *peerState, for
 	ps.dialMu.Lock()
 	defer ps.dialMu.Unlock()
 
+	m.mu.Lock()
+	overrideAddr := strings.TrimSpace(m.peerDirectOverrides[ps.deviceID])
+	m.mu.Unlock()
+
 	ps.mu.Lock()
 	if ps.revoked {
 		ps.mu.Unlock()
 		return
 	}
-	alreadyDirect := (ps.outSession != nil && !ps.outSession.IsClosed() && ps.outIsDirect) ||
-		(ps.inSession != nil && !ps.inSession.IsClosed() && ps.inIsDirect)
-	if alreadyDirect {
+	outOpen := ps.outSession != nil && !ps.outSession.IsClosed()
+	inOpen := ps.inSession != nil && !ps.inSession.IsClosed()
+	alreadyDirect := (outOpen && ps.outIsDirect) || (inOpen && ps.inIsDirect)
+	alreadySatisfied := alreadyDirect
+	if overrideAddr != "" {
+		alreadySatisfied = outOpen && ps.outIsDirect &&
+			ps.outDirectKind == model.ConnPathCustomDirect &&
+			ps.outDirectAddr == overrideAddr
+	}
+	if alreadySatisfied {
 		ps.mu.Unlock()
 		return
 	}
@@ -866,6 +901,9 @@ func (m *TailcatMesh) tryUpgradeToDirect(ctx context.Context, ps *peerState, for
 
 	sess, addr, directKind, rttMs, err := m.dialDirectPeer(ctx, ps)
 	if err != nil {
+		if force {
+			log.Printf("tailcat: direct mTLS upgrade for peer %s failed: %v", shortIDForLog(ps.deviceID), err)
+		}
 		return
 	}
 

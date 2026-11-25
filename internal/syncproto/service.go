@@ -231,10 +231,10 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("bootstrap self device: %w", err)
 	}
 
-	s.refreshTransportPeers()
 	if err := s.applyDirectTransportConfig(); err != nil {
 		log.Printf("syncproto: direct transport init warning: %v", err)
 	}
+	s.refreshTransportPeers()
 
 	// Seed connectedPeers from initial PeerStatuses snapshot.
 	for _, st := range s.tr.PeerStatuses() {
@@ -1132,7 +1132,9 @@ func (s *Service) JoinWithPairingCode(ctx context.Context, code string) error {
 	if err := s.store.SaveIdentity(updatedID); err != nil {
 		return fmt.Errorf("save adopted group identity: %w", err)
 	}
-	if gs, ok := s.tr.(interface{ SetGroupSecret([]byte) }); ok {
+	if gi, ok := s.tr.(interface{ SetGroupIdentity(string, []byte) }); ok {
+		gi.SetGroupIdentity(updatedID.GroupID, updatedID.GroupPrivateKey)
+	} else if gs, ok := s.tr.(interface{ SetGroupSecret([]byte) }); ok {
 		gs.SetGroupSecret(updatedID.GroupPrivateKey)
 	}
 
@@ -1167,6 +1169,9 @@ func (s *Service) JoinWithPairingCode(ctx context.Context, code string) error {
 	s.memberMu.Unlock()
 
 	s.refreshTransportPeers()
+	if err := s.applyDirectTransportConfig(); err != nil {
+		log.Printf("syncproto: direct transport post-pair warning: %v", err)
+	}
 	s.emit(model.AppEvent{Type: model.EventDevicesUpdated})
 
 	// Trigger anti-entropy sync with all active peers asynchronously.
