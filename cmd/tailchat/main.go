@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 
 	"tailchat/internal/store"
 	"tailchat/internal/syncproto"
@@ -110,10 +111,27 @@ func main() {
 		log.Fatalf("tailchat: start sync service: %v", err)
 	}
 
-	bridge := mobilebridge.Attach(ctx, svc)
-	defer bridge.Close()
+	var (
+		bridgeMu sync.Mutex
+		bridge   *mobilebridge.Controller
+	)
+	defer func() {
+		bridgeMu.Lock()
+		b := bridge
+		bridgeMu.Unlock()
+		if b != nil {
+			b.Close()
+		}
+	}()
 
-	if err := ui.Run(svc, nil); err != nil {
+	// Attach mobilebridge inside WhenReady (onReady) because mygo.NativePlugin.Call
+	// requires App.Run / App.WhenReady to have started on iOS & Android.
+	if err := ui.Run(svc, func() {
+		b := mobilebridge.Attach(ctx, svc)
+		bridgeMu.Lock()
+		bridge = b
+		bridgeMu.Unlock()
+	}); err != nil {
 		log.Fatalf("tailchat: ui exited with error: %v", err)
 	}
 }
@@ -131,6 +149,9 @@ func defaultAppDataDir() string {
 func defaultDownloadDir(fallbackDataDir string) string {
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		dir := filepath.Join(home, "Downloads")
+		if runtime.GOOS == "ios" {
+			dir = filepath.Join(home, "Documents", "Downloads")
+		}
 		if err := os.MkdirAll(dir, 0o755); err == nil {
 			return dir
 		}

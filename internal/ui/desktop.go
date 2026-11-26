@@ -103,6 +103,18 @@ func Run(api model.AppAPI, onReady func()) error {
 	})
 
 	mygo.App.WhenReady(func() {
+		syncRuntimeLocale := func(extraTag string) {
+			tags := append([]string(nil), mygo.App.PreferredLanguages()...)
+			if extraTag != "" {
+				tags = append([]string{extraTag}, tags...)
+			}
+			if appLoc := mygo.App.Locale(); appLoc != "" {
+				tags = append(tags, appLoc)
+			}
+			SetRuntimeSystemLocale(tags...)
+		}
+		syncRuntimeLocale("")
+
 		if runtime.GOOS == "darwin" && len(dockIconPNG) > 0 {
 			if err := mygo.App.Dock.SetIcon(dockIconPNG); err != nil {
 				log.Printf("tailchat: dock icon warning: %v", err)
@@ -155,8 +167,14 @@ func Run(api model.AppAPI, onReady func()) error {
 			_ = w.SetBackgroundColor(WindowBgHex(dark))
 			if dark {
 				w.SetWindowButtonsTheme(mygo.ThemeDark)
+				if !isDesktopPlatform() {
+					mygo.SystemBars.SetStyle(mygo.BarStyleLight)
+				}
 			} else {
 				w.SetWindowButtonsTheme(mygo.ThemeLight)
+				if !isDesktopPlatform() {
+					mygo.SystemBars.SetStyle(mygo.BarStyleDark)
+				}
 			}
 		}
 		applyWindowAppearance(initialPref, initialDark)
@@ -182,8 +200,14 @@ func Run(api model.AppAPI, onReady func()) error {
 						_ = w.SetBackgroundColor(WindowBgHex(effDark))
 						if effDark {
 							w.SetWindowButtonsTheme(mygo.ThemeDark)
+							if !isDesktopPlatform() {
+								mygo.SystemBars.SetStyle(mygo.BarStyleLight)
+							}
 						} else {
 							w.SetWindowButtonsTheme(mygo.ThemeLight)
+							if !isDesktopPlatform() {
+								mygo.SystemBars.SetStyle(mygo.BarStyleDark)
+							}
 						}
 					})
 					return
@@ -191,10 +215,21 @@ func Run(api model.AppAPI, onReady func()) error {
 				_ = w.SetBackgroundColor(WindowBgHex(dark))
 				if dark {
 					w.SetWindowButtonsTheme(mygo.ThemeDark)
+					if !isDesktopPlatform() {
+						mygo.SystemBars.SetStyle(mygo.BarStyleLight)
+					}
 				} else {
 					w.SetWindowButtonsTheme(mygo.ThemeLight)
+					if !isDesktopPlatform() {
+						mygo.SystemBars.SetStyle(mygo.BarStyleDark)
+					}
 				}
 			})
+		})
+
+		mygo.App.OnLocaleChanged(func(locale string) {
+			syncRuntimeLocale(locale)
+			w.Invalidate()
 		})
 
 		if runtime.GOOS == "linux" {

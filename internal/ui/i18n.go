@@ -20,8 +20,10 @@ const (
 )
 
 var (
-	systemLocaleOnce   sync.Once
-	cachedSystemLocale Locale
+	systemLocaleMu      sync.RWMutex
+	systemLocaleReady   bool
+	cachedSystemLocale  Locale
+	runtimeSystemLocale Locale
 
 	// systemLocaleDetector can be overridden in tests for deterministic Auto resolution.
 	systemLocaleDetector = detectSystemLocaleCached
@@ -29,6 +31,25 @@ var (
 	// platformLocaleDetector queries OS-native locale APIs (overridable in tests).
 	platformLocaleDetector = detectPlatformLocale
 )
+
+// SetRuntimeSystemLocale records the OS preferred language tags supplied by the native
+// host runtime (e.g. mygo.App.PreferredLanguages on iOS, Android, macOS, Windows, Linux).
+// This enables automatic locale detection on mobile platforms where POSIX env vars are unset.
+func SetRuntimeSystemLocale(tags ...string) {
+	var resolved Locale
+	for _, tag := range tags {
+		raw := strings.TrimSpace(tag)
+		if isNeutralLocaleEnv(raw) {
+			continue
+		}
+		resolved = parseSystemLocale(raw)
+		break
+	}
+	systemLocaleMu.Lock()
+	runtimeSystemLocale = resolved
+	systemLocaleReady = false
+	systemLocaleMu.Unlock()
+}
 
 // ResolveLocale resolves a user language preference ("auto", "en", "zh") to a concrete UI Locale.
 // Unknown values default to "auto"; unsupported system locales fall back to English (LocaleEN).
@@ -49,10 +70,20 @@ func ResolveLocale(pref string) Locale {
 }
 
 func detectSystemLocaleCached() Locale {
-	systemLocaleOnce.Do(func() {
-		cachedSystemLocale = detectSystemLocale()
-	})
-	return cachedSystemLocale
+	systemLocaleMu.RLock()
+	if systemLocaleReady {
+		loc := cachedSystemLocale
+		systemLocaleMu.RUnlock()
+		return loc
+	}
+	systemLocaleMu.RUnlock()
+
+	loc := detectSystemLocale()
+	systemLocaleMu.Lock()
+	cachedSystemLocale = loc
+	systemLocaleReady = true
+	systemLocaleMu.Unlock()
+	return loc
 }
 
 func detectSystemLocale() Locale {
@@ -62,6 +93,13 @@ func detectSystemLocale() Locale {
 			continue
 		}
 		return parseSystemLocale(raw)
+	}
+
+	systemLocaleMu.RLock()
+	rtLoc := runtimeSystemLocale
+	systemLocaleMu.RUnlock()
+	if rtLoc == LocaleZH || rtLoc == LocaleEN {
+		return rtLoc
 	}
 
 	if platformLocaleDetector != nil {

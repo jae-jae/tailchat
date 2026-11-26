@@ -2712,3 +2712,197 @@ func TestSplitTitleBarLayoutAndInteractions(t *testing.T) {
 	}
 }
 
+func TestRuntimeSystemLocaleDetection(t *testing.T) {
+	for _, key := range []string{"LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"} {
+		t.Setenv(key, "")
+	}
+	origPlatform := platformLocaleDetector
+	t.Cleanup(func() {
+		platformLocaleDetector = origPlatform
+		SetRuntimeSystemLocale()
+	})
+	// Simulate iOS/Android where shell platformLocaleDetector returns empty string.
+	platformLocaleDetector = func() string { return "" }
+
+	SetRuntimeSystemLocale("zh-Hans-CN", "en-CN")
+	if got := ResolveLocale(model.LanguageAuto); got != LocaleZH {
+		t.Fatalf("ResolveLocale(auto) with runtime zh-Hans-CN = %q, want %q", got, LocaleZH)
+	}
+
+	// Updating runtime locale dynamically invalidates any cached auto-detected value.
+	SetRuntimeSystemLocale("en-US")
+	if got := ResolveLocale(model.LanguageAuto); got != LocaleEN {
+		t.Fatalf("ResolveLocale(auto) after switching runtime to en-US = %q, want %q", got, LocaleEN)
+	}
+
+	// Neutral/empty runtime tags fall back to platformLocaleDetector.
+	SetRuntimeSystemLocale("", "C.UTF-8")
+	platformLocaleDetector = func() string { return "zh-TW" }
+	if got := ResolveLocale(model.LanguageAuto); got != LocaleZH {
+		t.Fatalf("ResolveLocale(auto) fallback to platform zh-TW = %q, want %q", got, LocaleZH)
+	}
+}
+
+func TestMobileViewportResponsiveModals(t *testing.T) {
+	api := newMockAppAPI()
+	api.config.Language = model.LanguageChinese
+	api.config.Theme = model.ThemeDark
+	api.devices[1].DirectAddrs = []string{"192.168.1.42:19840"}
+
+	state := NewState(api)
+	state.Start(context.Background())
+	t.Cleanup(state.Stop)
+
+	app := NewApp(state)
+	app.runAsync = func(fn func()) { fn() }
+
+	// Test on iPhone 16e (390pt) and iPhone 17 Pro (402pt) logical widths.
+	for _, width := range []int{390, 402} {
+		wf := float32(width)
+		tt := mygoui.NewTester(app.View, width, 844)
+		tt.Frame()
+
+		// 1. Settings modal (all 4 tabs) must stay strictly within viewport bounds.
+		if err := tt.Click("设置与 DERP"); err != nil {
+			t.Fatalf("[w=%d] open settings: %v", width, err)
+		}
+		tt.Frame()
+		for _, tab := range []string{"通用", "传输", "网络", "关于"} {
+			if err := tt.Click(tab); err != nil {
+				t.Fatalf("[w=%d] click settings tab %q: %v", width, tab, err)
+			}
+			tt.Frame()
+			closeRect, ok := tt.Find("关闭设置")
+			if !ok {
+				t.Fatalf("[w=%d] missing settings close button on tab %q", width, tab)
+			}
+			if closeRect.X < 0 || closeRect.X+closeRect.W > wf {
+				t.Fatalf("[w=%d] settings close button overflowed viewport on tab %q: rect=%+v", width, tab, closeRect)
+			}
+		}
+		app.settingsOpen = false
+		tt.Frame()
+
+		// 2. Pairing modal must stay strictly within viewport bounds.
+		app.openPairingFlow(0)
+		tt.Frame()
+		pairClose, ok := tt.Find("关闭")
+		if !ok {
+			t.Fatalf("[w=%d] missing pairing close button", width)
+		}
+		if pairClose.X < 0 || pairClose.X+pairClose.W > wf {
+			t.Fatalf("[w=%d] pairing close button overflowed viewport: rect=%+v", width, pairClose)
+		}
+		app.pairOpen = false
+		tt.Frame()
+
+		// 3. Devices popover must stay within viewport bounds.
+		app.devicesPopoverOpen = true
+		app.expandedDeviceID = "dev-peer-002"
+		tt.Frame()
+		devTitle, ok := tt.Find("已配对设备")
+		if !ok {
+			t.Fatalf("[w=%d] missing devices popover title", width)
+		}
+		if devTitle.X < 0 || devTitle.X+devTitle.W > wf {
+			t.Fatalf("[w=%d] devices popover overflowed viewport: rect=%+v", width, devTitle)
+		}
+		app.devicesPopoverOpen = false
+		app.expandedDeviceID = ""
+		tt.Frame()
+	}
+}
+
+func TestLongUnbrokenTextWrapsInsideBubble(t *testing.T) {
+	now := time.Now().UnixMilli()
+	longPeerToken := "tailchat-pair://" + strings.Repeat("eyJ2IjoxLCJncm91cF9pZCI6IjAxTTgxSkcwNENKMlJOQUhEUjBF", 5)
+	longSelfURL := "https://example.com/very/long/unbroken/token/" + strings.Repeat("a1b2c3d4e5f6g7h8", 12)
+
+	api := newMockAppAPI()
+	api.config.Language = model.LanguageChinese
+	api.messages = []model.Message{
+		{
+			MsgID:          "msg-short-peer",
+			AuthorDeviceID: "dev-peer-002",
+			AuthorName:     "iPhone 16",
+			AuthorSeq:      1,
+			Kind:           model.MessageKindText,
+			TextBody:       "kk",
+			CreatedAt:      now - 120_000,
+		},
+		{
+			MsgID:          "msg-short-self",
+			AuthorDeviceID: "dev-self-001",
+			AuthorName:     "MacBook Pro",
+			AuthorSeq:      2,
+			Kind:           model.MessageKindText,
+			TextBody:       "rrr",
+			CreatedAt:      now - 90_000,
+		},
+		{
+			MsgID:          "msg-long-peer",
+			AuthorDeviceID: "dev-peer-002",
+			AuthorName:     "iPhone 16",
+			AuthorSeq:      3,
+			Kind:           model.MessageKindText,
+			TextBody:       longPeerToken,
+			CreatedAt:      now - 60_000,
+		},
+		{
+			MsgID:          "msg-long-self",
+			AuthorDeviceID: "dev-self-001",
+			AuthorName:     "MacBook Pro",
+			AuthorSeq:      4,
+			Kind:           model.MessageKindText,
+			TextBody:       longSelfURL,
+			CreatedAt:      now - 30_000,
+		},
+	}
+
+	state := NewState(api)
+	state.Start(context.Background())
+	t.Cleanup(state.Stop)
+	app := NewApp(state)
+
+	for _, width := range []int{390, 540} {
+		wf := float32(width)
+		tt := mygoui.NewTester(app.View, width, 800)
+		tt.Frame()
+
+		// Short messages must stay compact rather than stretching to max bubble width.
+		shortRect, ok := tt.Find("kk")
+		if !ok {
+			t.Fatalf("[w=%d] expected short peer message", width)
+		}
+		if shortRect.W > 100 {
+			t.Fatalf("[w=%d] short message stretched unexpectedly: rect=%+v", width, shortRect)
+		}
+
+		// Long unbroken peer token must wrap across multiple lines and stay inside viewport.
+		peerRect, ok := tt.Find(longPeerToken)
+		if !ok {
+			t.Fatalf("[w=%d] expected long peer token", width)
+		}
+		if peerRect.X < 0 || peerRect.X+peerRect.W > wf-10 {
+			t.Fatalf("[w=%d] long peer token overflowed viewport: rect=%+v", width, peerRect)
+		}
+		if peerRect.H < 60 {
+			t.Fatalf("[w=%d] long peer token did not wrap onto multiple lines: rect=%+v", width, peerRect)
+		}
+
+		// Long unbroken self URL must also wrap and stay inside viewport.
+		selfRect, ok := tt.Find(longSelfURL)
+		if !ok {
+			t.Fatalf("[w=%d] expected long self URL", width)
+		}
+		if selfRect.X < 0 || selfRect.X+selfRect.W > wf-10 {
+			t.Fatalf("[w=%d] long self URL overflowed viewport: rect=%+v", width, selfRect)
+		}
+		if selfRect.H < 50 {
+			t.Fatalf("[w=%d] long self URL did not wrap onto multiple lines: rect=%+v", width, selfRect)
+		}
+	}
+}
+
+
+

@@ -272,6 +272,7 @@ func (a *App) renderDevicesPopover(c *mygoui.Context, anchor, actionsAnchor mygo
 		panel.AttachTo(attachTarget, mygoui.AnchorBottomRight, mygoui.AnchorTopRight).
 			Margin(10, 0, 0, 0).
 			Width(356).
+			MaxWidthPercent(92).
 			Padding(14).
 			Radius(16).
 			Background(p.Surface).
@@ -358,6 +359,8 @@ func (a *App) renderPairingModal(c *mygoui.Context, snap ViewSnapshot) {
 	mygoui.DialogBase(c.Key("modal-pair"), &a.pairOpen, func(backdrop, panel mygoui.Element) {
 		backdrop.Background(p.Backdrop)
 		panel.Width(396).
+			MaxWidthPercent(92).
+			MaxHeightPercent(90).
 			Padding(20).
 			Radius(22).
 			Background(p.Surface).
@@ -1282,8 +1285,9 @@ func (a *App) renderSettingsModal(c *mygoui.Context, snap ViewSnapshot) {
 	mygoui.DialogBase(c.Key("modal-settings"), openPtr, func(backdrop, panel mygoui.Element) {
 		backdrop.Background(p.Backdrop)
 		panel.Width(480).
+			MaxWidthPercent(94).
 			Height(616).
-			MaxHeightPercent(92).
+			MaxHeightPercent(86).
 			Padding(18, 18).
 			Radius(18).
 			Background(p.Surface).
@@ -1376,10 +1380,12 @@ func (a *App) renderSettingsGeneralTab(c *mygoui.Context, t uiStrings) {
 			})
 		})
 
-		// Window behavior card.
-		settingsSectionCard(c, func() {
-			mygoui.Checkbox(c.Key("set-min-tray"), &a.settingsDraft.MinimizeToTray, t.MinimizeToTray)
-		})
+		// Window behavior card (desktop-only: tray does not exist on iOS/Android).
+		if isDesktopPlatform() {
+			settingsSectionCard(c, func() {
+				mygoui.Checkbox(c.Key("set-min-tray"), &a.settingsDraft.MinimizeToTray, t.MinimizeToTray)
+			})
+		}
 
 		// Danger Zone: Clear All Chat History.
 		mygoui.Row(c).
@@ -1406,22 +1412,24 @@ func (a *App) renderSettingsGeneralTab(c *mygoui.Context, t uiStrings) {
 func (a *App) renderSettingsTransferTab(c *mygoui.Context, t uiStrings) {
 	p := zenPal(c)
 	mygoui.Column(c).Gap(10).FillWidth().Children(func() {
-		// File Storage Path card.
-		settingsSectionCard(c, func() {
-			mygoui.Column(c).Gap(6).FillWidth().Children(func() {
-				mygoui.Text(c, t.DownloadDirLabel).FontSize(12).FontWeight(600).TextColor(p.Ink)
-				mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
-					mygoui.TextInput(c.Key("set-download-dir"), &a.settingsDraft.DownloadDir).
-						Placeholder(t.DownloadDirPlace).
-						Label(t.DownloadDirLabel).
-						Grow(1)
-					if zenPillBtn(c, "btn-browse-dir", t.BrowseDir, false, false).Clicked() {
-						a.triggerChooseDownloadDir()
-					}
+		// File Storage Path card (desktop-only: mobile platforms use sandboxed app storage).
+		if isDesktopPlatform() {
+			settingsSectionCard(c, func() {
+				mygoui.Column(c).Gap(6).FillWidth().Children(func() {
+					mygoui.Text(c, t.DownloadDirLabel).FontSize(12).FontWeight(600).TextColor(p.Ink)
+					mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
+						mygoui.TextInput(c.Key("set-download-dir"), &a.settingsDraft.DownloadDir).
+							Placeholder(t.DownloadDirPlace).
+							Label(t.DownloadDirLabel).
+							Grow(1)
+						if zenPillBtn(c, "btn-browse-dir", t.BrowseDir, false, false).Clicked() {
+							a.triggerChooseDownloadDir()
+						}
+					})
+					mygoui.Text(c, t.DownloadDirHint).FontSize(11).TextColor(p.InkMuted).Wrap()
 				})
-				mygoui.Text(c, t.DownloadDirHint).FontSize(11).TextColor(p.InkMuted).Wrap()
 			})
-		})
+		}
 
 		// Auto-download threshold & Download speed limit card.
 		settingsSectionCard(c, func() {
@@ -1456,14 +1464,16 @@ func (a *App) renderSettingsNetworkTab(c *mygoui.Context, snap ViewSnapshot, t u
 				mygoui.Text(c, t.DirectConnHint).FontSize(11).TextColor(p.InkMuted).Wrap()
 			})
 
-			mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).FillWidth().Children(func() {
+			mygoui.Row(c).Gap(8).AlignItems(mygoui.Center).Wrap().FillWidth().Children(func() {
 				mygoui.Checkbox(c.Key("set-direct-enable"), &a.settingsDraft.DirectListenEnabled, t.DirectListenEnable)
 				mygoui.Spacer(c)
-				mygoui.Text(c, t.DirectListenPort).FontSize(11.5).TextColor(p.InkSecondary).NoWrap()
-				mygoui.TextInput(c.Key("set-direct-port"), &a.settingsDraft.DirectListenPortStr).
-					Placeholder("19840").
-					Label(t.DirectListenPort).
-					Width(78)
+				mygoui.Row(c).Gap(6).AlignItems(mygoui.Center).Shrink(0).Children(func() {
+					mygoui.Text(c, t.DirectListenPort).FontSize(11.5).TextColor(p.InkSecondary).NoWrap()
+					mygoui.TextInput(c.Key("set-direct-port"), &a.settingsDraft.DirectListenPortStr).
+						Placeholder("19840").
+						Label(t.DirectListenPort).
+						Width(78)
+				})
 			})
 
 			if a.settingsDraft.DirectListenEnabled && len(snap.LocalDirectAddrs) > 0 {
@@ -1631,65 +1641,67 @@ func (a *App) renderSettingsAboutTab(c *mygoui.Context, snap ViewSnapshot, t uiS
 					})
 			})
 
-		// Software Update card.
-		mygoui.Row(c).
-			Padding(12, 14).
-			Gap(10).
-			Radius(14).
-			Background(p.SurfaceSubtle).
-			Border(1, p.Border).
-			AlignItems(mygoui.Center).
-			FillWidth().
-			Children(func() {
-				mygoui.Row(c).
-					Size(34, 34).
-					Radius(10).
-					Background(p.AccentSoft).
-					Justify(mygoui.Center).
-					AlignItems(mygoui.Center).
-					Children(func() {
-						mygoui.Icon(c, iconSparkles).Size(16, 16).TextColor(p.Accent)
+		// Software Update card (desktop-only: mobile updates are distributed via App Store / Play Store).
+		if isDesktopPlatform() {
+			mygoui.Row(c).
+				Padding(12, 14).
+				Gap(10).
+				Radius(14).
+				Background(p.SurfaceSubtle).
+				Border(1, p.Border).
+				AlignItems(mygoui.Center).
+				FillWidth().
+				Children(func() {
+					mygoui.Row(c).
+						Size(34, 34).
+						Radius(10).
+						Background(p.AccentSoft).
+						Justify(mygoui.Center).
+						AlignItems(mygoui.Center).
+						Children(func() {
+							mygoui.Icon(c, iconSparkles).Size(16, 16).TextColor(p.Accent)
+						})
+
+					mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+						mygoui.Text(c, t.SoftwareUpdates).FontSize(12.5).Bold().TextColor(p.Ink)
+						statusLine := fmt.Sprintf(t.CurrentVersionF, ver)
+						statusColor := p.InkSecondary
+						switch {
+						case up.Checking:
+							statusLine = t.CheckingUpdates
+						case up.Available && up.LatestVersion != "":
+							statusLine = fmt.Sprintf(t.UpdateAvailableF, up.LatestVersion)
+							statusColor = p.Accent
+						case up.LastError != "":
+							statusLine = t.UpdateCheckFailedPref + up.LastError
+							statusColor = p.Danger
+						case up.UpToDate:
+							statusLine = t.UpToDate
+							statusColor = p.DirectText
+						}
+						mygoui.Text(c, statusLine).
+							FontSize(11.5).
+							TextColor(statusColor).
+							FillWidth().
+							SingleLine()
 					})
 
-				mygoui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
-					mygoui.Text(c, t.SoftwareUpdates).FontSize(12.5).Bold().TextColor(p.Ink)
-					statusLine := fmt.Sprintf(t.CurrentVersionF, ver)
-					statusColor := p.InkSecondary
-					switch {
-					case up.Checking:
-						statusLine = t.CheckingUpdates
-					case up.Available && up.LatestVersion != "":
-						statusLine = fmt.Sprintf(t.UpdateAvailableF, up.LatestVersion)
-						statusColor = p.Accent
-					case up.LastError != "":
-						statusLine = t.UpdateCheckFailedPref + up.LastError
-						statusColor = p.Danger
-					case up.UpToDate:
-						statusLine = t.UpToDate
-						statusColor = p.DirectText
+					if up.Available && up.LatestVersion != "" {
+						if zenPillBtn(c, "btn-settings-view-update", t.ViewUpdate, true, false).Clicked() {
+							a.settingsOpen = false
+							a.updateModalOpen = true
+						}
+					} else {
+						btnLabel := t.CheckForUpdates
+						if up.Checking {
+							btnLabel = t.CheckingUpdates
+						}
+						if zenPillBtn(c, "btn-check-updates", btnLabel, false, up.Checking).Clicked() {
+							a.state.CheckForUpdates(context.Background(), true)
+						}
 					}
-					mygoui.Text(c, statusLine).
-						FontSize(11.5).
-						TextColor(statusColor).
-						FillWidth().
-						SingleLine()
 				})
-
-				if up.Available && up.LatestVersion != "" {
-					if zenPillBtn(c, "btn-settings-view-update", t.ViewUpdate, true, false).Clicked() {
-						a.settingsOpen = false
-						a.updateModalOpen = true
-					}
-				} else {
-					btnLabel := t.CheckForUpdates
-					if up.Checking {
-						btnLabel = t.CheckingUpdates
-					}
-					if zenPillBtn(c, "btn-check-updates", btnLabel, false, up.Checking).Clicked() {
-						a.state.CheckForUpdates(context.Background(), true)
-					}
-				}
-			})
+		}
 
 		// GitHub Repository card.
 		ghBtn := mygoui.ButtonBase(c.Key("btn-open-github"))

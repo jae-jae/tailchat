@@ -405,6 +405,7 @@ func (a *App) renderAudioBubble(c *mygoui.Context, snap ViewSnapshot, msg model.
 
 	mygoui.Column(c).
 		Width(332).
+		MaxWidthPercent(90).
 		Padding(11, 13).
 		Gap(9).
 		Radius(16).

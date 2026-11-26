@@ -997,9 +997,10 @@ func (a *App) renderToastOverlay(c *mygoui.Context, snap ViewSnapshot) {
 		bg = p.DangerSolid
 		border = p.DangerBorder
 	}
-	topOffset := float32(68)
+	safeTop, _, _, _ := c.SafeArea()
+	topOffset := safeTop + 68
 	if a.isSplitTitleBar() {
-		topOffset = 88
+		topOffset = safeTop + 88
 	}
 	mygoui.Overlay(c, func() {
 		mygoui.Row(c.Key("toast-overlay")).
@@ -1132,9 +1133,20 @@ func (a *App) renderMessageBubble(c *mygoui.Context, snap ViewSnapshot, msg mode
 	isSelf := snap.Identity.DeviceID != "" && msg.AuthorDeviceID == snap.Identity.DeviceID
 	ts := FormatTimestamp(msg.CreatedAt)
 
+	winW, _ := c.Size()
+	maxBubbleW := (winW - 32) * 0.84
+	if maxBubbleW < 180 {
+		maxBubbleW = 180
+	}
+	maxTextW := maxBubbleW - 28 // bubble horizontal padding (14 * 2)
+	if maxTextW < 140 {
+		maxTextW = 140
+	}
+
 	group := mygoui.Column(c.Key("msg-"+msg.MsgID)).
 		Gap(4).
-		MaxWidthPercent(84)
+		MinWidth(0).
+		MaxWidth(maxBubbleW)
 	if isSelf {
 		group.AlignSelf(mygoui.End).AlignItems(mygoui.End)
 	} else {
@@ -1170,19 +1182,24 @@ func (a *App) renderMessageBubble(c *mygoui.Context, snap ViewSnapshot, msg mode
 		case model.MessageKindText:
 			if isSelf {
 				mygoui.Column(c).
+					MinWidth(0).
+					MaxWidth(maxBubbleW).
 					Padding(10, 14).
 					Radius(16, 5, 16, 16).
 					Background(p.SelfBubbleBg).
 					Shadow(0, 2, 8, 0, p.ShadowCard).
 					Children(func() {
 						mygoui.Text(c, msg.TextBody).
+							MinWidth(0).
+							MaxWidth(maxTextW).
 							FontSize(13.5).
 							TextColor(p.SelfBubbleInk).
-							Wrap().
 							Selectable()
 					})
 			} else {
 				mygoui.Column(c).
+					MinWidth(0).
+					MaxWidth(maxBubbleW).
 					Padding(10, 14).
 					Radius(5, 16, 16, 16).
 					Background(p.Surface).
@@ -1190,9 +1207,10 @@ func (a *App) renderMessageBubble(c *mygoui.Context, snap ViewSnapshot, msg mode
 					Shadow(0, 2, 8, 0, p.ShadowSoft).
 					Children(func() {
 						mygoui.Text(c, msg.TextBody).
+							MinWidth(0).
+							MaxWidth(maxTextW).
 							FontSize(13.5).
 							TextColor(p.Ink).
-							Wrap().
 							Selectable()
 					})
 			}
@@ -1294,6 +1312,7 @@ func (a *App) renderStandardFileBubble(c *mygoui.Context, snap ViewSnapshot, msg
 
 	mygoui.Column(c).
 		Width(332).
+		MaxWidthPercent(90).
 		Padding(12, 14).
 		Gap(10).
 		Radius(16).
